@@ -1,15 +1,77 @@
-# Projeto React - POS 2026
+# Psicologia
 
-Nesse projeto vocês deverão criar clientes web com React (JS) para a API de Agendamentos da disciplina.
+## Descrição
+Sistema web para gestão de consultório de psicologia, com navegação para pacientes e administradores, organização de agenda, acompanhamento de sessões, cadastro de profissionais e administração dos serviços e avaliações.
 
-## Instruções
+## Objetivo
+Permitir que o cliente web consuma a API de agendamentos do projeto Psicologia, oferecendo uma interface profissional e responsiva para acompanhar agendamentos, visualizar profissionais e gerenciar o consultório.
 
-- Criem um fork desse repositório (um por grupo). No momento da criação do fork mudem o nome do repositório para o nome do cliente de vocês. Lembrem-se de mudar também o nome no `package.json`.
-- Na pasta `docs/` estão as especificações para cada projeto, siga o destinado ao seu grupo.
-- No GSA foi enviada a lista dos grupos com usuários admin e senhas. Recomendo que mudem as senhas assim que tiverem acesso.
-- Todos os participantes devem ter commits no repositóro.
-- Substituam esse `README.md` com informações do seu projeto.
-- Usem o projeto da [Escola de Música](https://pos-escola-de-musica-web.vercel.app/) como referência [GitHub](https://github.com/dvcirilo-ifrn/pos-escola-de-musica-web)
-- O projeto deve ser hospedado no [Vercel](https://vercel.com/).
-- Na data da entrega o projeto deverá ser demonstrado diretamente do Vercel e serão feitas perguntas referentes à implementação.
-- *Data de entrega*: 16/10/2026
+## Tecnologias utilizadas
+- React
+- Vite
+- JavaScript
+- React Router
+- Fetch API
+- Vercel
+
+## Funcionalidades
+- Login e cadastro de pacientes
+- Recuperação de senha
+- Perfil do usuário
+- Dashboard inicial e visão geral
+- Agendamento de consultas
+- Lista de sessões e histórico
+- Visualização de profissionais
+- Painel administrativo para agenda, solicitações e avaliações
+- Configuração do negócio e identidade visual
+- Tratamento de carregamento e erros da API
+
+## Estrutura básica do projeto
+- `src/App.jsx`: aplicação principal com rotas e páginas
+- `src/App.css`: estilos visuais do sistema
+- `src/main.jsx`: entrada da aplicação
+- `public/`: arquivos públicos do Vite
+- `docs/`: especificações do projeto e regras do professor
+
+## Como instalar
+1. Clone o repositório.
+2. Acesse a pasta do projeto.
+3. Instale as dependências:
+
+```bash
+npm install
+```
+
+## Como executar localmente
+```bash
+npm run dev
+```
+
+A aplicação estará disponível em `http://localhost:5173` por padrão.
+
+## Como configurar a URL da API
+A URL base da API pode ser configurada por variável de ambiente:
+
+```bash
+VITE_API_BASE_URL=https://agendamentos.spaincentral.cloudapp.azure.com/api
+```
+
+Crie um arquivo `.env` na raiz do projeto com essa variável, ou ajuste diretamente no código caso necessário.
+
+## Como fazer o build
+```bash
+npm run build
+```
+
+## Deploy no Vercel
+1. Faça login no Vercel.
+2. Importe o repositório.
+3. Defina a variável de ambiente `VITE_API_BASE_URL` com a URL da API.
+4. Publique o projeto.
+5. O Vercel executará automaticamente o build do Vite.
+
+## Integrantes do grupo
+- [Nome do integrante 1]
+- [Nome do integrante 2]
+
+OBS.: O projeto foi desenvolvido seguindo as instruções específicas da pasta `docs/psicologia.md`.
