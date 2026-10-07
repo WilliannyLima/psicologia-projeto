@@ -71,7 +71,8 @@ npm run build
 5. O Vercel executará automaticamente o build do Vite.
 
 ## Integrantes do grupo
-- [Nome do integrante 1]
-- [Nome do integrante 2]
+- Willianny Ritchelly Amaro de Lima
+- Joice Leilhany Batista dos Santos
+- Maria Elayne Fernandes de Oliveira 
 
 OBS.: O projeto foi desenvolvido seguindo as instruções específicas da pasta `docs/psicologia.md`.
