@@ -116,7 +116,7 @@ Em todas as telas com dados da API: indicador de carregamento enquanto a requisi
 ### E2. Cadastro
 
 - **Objetivo:** Criar a conta de paciente.
-- **Mostra:** formulário com nome, e-mail e senha
+- **Mostra:** formulário com nome, e-mail, senha e confirmação de senha (validada no frontend; não enviada à API)
 - **Endpoints:** `POST /auth/cadastro/` com `organizacao: "psicologia"` (fixo no app); em seguida `POST /auth/login/` para entrar automaticamente
 - **Ações:** "Criar conta"
 - **Estados:** **400**: mensagens por campo (ex.: e-mail já cadastrado, senha fraca); **429**: aguardar
