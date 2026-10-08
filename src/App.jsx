@@ -1253,14 +1253,14 @@ function AppointmentFlowPage() {
   const [services, setServices] = useState([])
   const [selectedService, setSelectedService] = useState(null)
   const [resources, setResources] = useState([])
-  const [selectedResource, setSelectedResource] = useState(null)
+  const [selectedResource, setSelectedResource] = useState(location.state?.resource || null)
   const [date, setDate] = useState('')
   const [slots, setSlots] = useState([])
   const [selectedSlot, setSelectedSlot] = useState(null)
   const [observacoes, setObservacoes] = useState('')
   const [fieldErrors, setFieldErrors] = useState({})
   const [submittedAppointment, setSubmittedAppointment] = useState(null)
-  const [step, setStep] = useState(2)
+  const [step, setStep] = useState(location.state?.resource ? 2 : 1)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [loaded, setLoaded] = useState(false)
@@ -1276,12 +1276,43 @@ function AppointmentFlowPage() {
           ? response
           : []
 
-  const loadServices = async () => {
+  const availableServices = selectedResource?.id
+    ? services.filter((service) => {
+        if (Array.isArray(selectedResource.servicos)) {
+          return selectedResource.servicos.some((serviceId) => Number(serviceId) === Number(service.id))
+        }
+        if (Array.isArray(service.recursos)) {
+          return service.recursos.some((resourceId) => Number(resourceId) === Number(selectedResource.id))
+        }
+        return true
+      })
+    : services
+
+  const normalizeAvailableSlots = (response) => {
+    const groups = Array.isArray(response)
+      ? response
+      : Array.isArray(response?.results)
+        ? response.results
+        : []
+
+    return groups.flatMap((group) => {
+      if (!Array.isArray(group?.horarios)) return []
+
+      return group.horarios
+        .filter((inicio) => typeof inicio === 'string' && !Number.isNaN(Date.parse(inicio)))
+        .map((inicio) => ({
+          inicio,
+          ...(group.recurso ? { recurso: group.recurso } : {}),
+        }))
+    })
+  }
+
+  const loadResources = async () => {
     try {
       setLoading(true)
       setError('')
-      const response = await apiRequest('/servicos/')
-      setServices(listResponse(response))
+      const response = await apiRequest('/recursos/')
+      setResources(listResponse(response))
       setLoaded(true)
     } catch (err) {
       setError(err.message)
@@ -1290,29 +1321,19 @@ function AppointmentFlowPage() {
     }
   }
 
-  useEffect(() => {
-    loadServices()
-  }, [])
-
-  const handleSelectService = (service) => {
+  const handleSelectResource = async (resource) => {
     slotsRequestId.current += 1
-    setSelectedService(service)
-    setSelectedResource(preselectedResource)
-    setResources([])
+    setSelectedResource(resource)
+    setSelectedService(null)
     setDate('')
     setSlots([])
     setSelectedSlot(null)
     setError('')
-    setStep(3)
-  }
-
-  const loadResources = async () => {
-    if (!selectedService) return
+    setStep(2)
     try {
       setLoading(true)
-      setError('')
-      const response = await apiRequest(`/recursos/?servicos=${selectedService.id}`)
-      setResources(listResponse(response))
+      const response = await apiRequest('/servicos/')
+      setServices(listResponse(response))
     } catch (err) {
       setError(err.message)
     } finally {
@@ -1321,26 +1342,34 @@ function AppointmentFlowPage() {
   }
 
   useEffect(() => {
-    if (step === 3) loadResources()
-  }, [step, selectedService])
+    if (preselectedResource) {
+      handleSelectResource(preselectedResource)
+    } else {
+      loadResources()
+    }
+  }, [])
 
-  const handleSelectResource = (resource) => {
-    setSelectedResource(resource)
-    setStep(4)
+  const handleSelectService = async (service) => {
+    setSelectedService(service)
+    setDate('')
+    setSlots([])
+    setSelectedSlot(null)
+    setStep(3)
   }
 
-  const loadSlots = async (selectedDate = date) => {
-    if (!selectedService || !selectedDate) return
+  const loadSlotsFor = async (service, resource, selectedDate) => {
+    if (!service || !selectedDate) return
     const requestId = ++slotsRequestId.current
 
     try {
       setLoading(true)
       setError('')
       const result = await apiRequest(
-        `/horarios-livres/?servico=${selectedService.id}&data=${selectedDate}${selectedResource?.id ? `&recurso=${selectedResource.id}` : ''}`,
+        `/horarios-livres/?servico=${service.id}&data=${selectedDate}${resource?.id ? `&recurso=${resource.id}` : ''}`,
       )
       if (requestId !== slotsRequestId.current) return
-      setSlots(listResponse(result))
+      const availableSlots = normalizeAvailableSlots(result)
+      setSlots(availableSlots)
       setSelectedSlot(null)
     } catch (err) {
       if (requestId !== slotsRequestId.current) return
@@ -1350,19 +1379,21 @@ function AppointmentFlowPage() {
     }
   }
 
+  const loadSlots = (selectedDate = date) => loadSlotsFor(selectedService, selectedResource, selectedDate)
+
   const handleSelectDate = (value) => {
     setDate(value)
     setSlots([])
     setSelectedSlot(null)
     slotsRequestId.current += 1
     if (value) {
-      loadSlots(value)
+      loadSlotsFor(selectedService, selectedResource, value)
     }
   }
 
   const handleSelectSlot = (slot) => {
     setSelectedSlot(slot)
-    setStep(5)
+    setStep(4)
   }
 
   const handleConfirm = async () => {
@@ -1439,78 +1470,55 @@ function AppointmentFlowPage() {
       {error ? (
         <>
           <Alert type="danger" message={error} />
-          <button type="button" className="button-secondary" onClick={step === 2 ? loadServices : step === 3 ? loadResources : loadSlots}>
+          <button type="button" className="button-secondary" onClick={step === 1 ? loadResources : step === 2 ? () => handleSelectResource(selectedResource) : loadSlots}>
             Tentar de novo
           </button>
         </>
       ) : null}
       {loading ? <LoadingState message="Carregando informações do agendamento" /> : null}
 
-      {step === 2 && !loading ? (
+      {step === 1 && !loading ? (
         <div className="card section-card">
-          <h3>Escolha o serviço</h3>
-          {!loaded || services.length === 0 ? (
-            <EmptyState title="Nenhum serviço disponível" description="Ainda não há serviços disponíveis para agendamento." />
-          ) : (
-            <div className="service-grid">
-              {services.map((service) => (
-                <button type="button" key={service.id} className="service-card" onClick={() => handleSelectService(service)}>
-                  {service.imagem || service.imagem_url ? <img src={service.imagem || service.imagem_url} alt="" /> : null}
-                  <strong>{service.nome}</strong>
-                  {service.descricao ? <span>{service.descricao}</span> : null}
-                  {service.duracao !== undefined ? <em>{service.duracao} min</em> : null}
-                  {service.preco !== undefined ? <b>{formatCurrency(service.preco)}</b> : null}
-                </button>
-              ))}
+          <h3>Escolha o psicólogo</h3>
+          {!loaded || resources.length === 0 ? <EmptyState title="Nenhum psicólogo disponível" description="Ainda não há profissionais disponíveis para agendamento." /> : (
+            <div className="staff-grid">
+              <button type="button" className="staff-card" onClick={() => handleSelectResource(null)}><div className="staff-card-content"><h3>Qualquer profissional</h3><p>Escolha entre os profissionais disponíveis para o serviço.</p></div></button>
+              {resources.map((resource) => <button type="button" key={resource.id} className="staff-card" onClick={() => handleSelectResource(resource)}><div className="staff-card-content">{resource.foto || resource.foto_url ? <img src={resource.foto || resource.foto_url} alt="" /> : null}<h3>{resource.nome}</h3>{resource.bio ? <p>{resource.bio}</p> : null}</div></button>)}
             </div>
           )}
         </div>
       ) : null}
 
-      {step === 3 && !loading ? (
+      {step === 2 && !loading ? (
         <div className="card section-card">
-          <button type="button" className="back-button" onClick={() => setStep(2)}><span aria-hidden="true">←</span> Voltar para serviços</button>
-          <h3>Escolha o psicólogo</h3>
-          <div className="staff-grid">
-            {!preselectedResource ? <button type="button" className={`staff-card ${!selectedResource ? 'selected' : ''}`} onClick={() => handleSelectResource(null)}>
-              <div className="staff-card-content"><h3>Qualquer um</h3><p>Escolha o primeiro profissional disponível.</p></div>
-            </button> : null}
-            {resources.filter((resource) => !preselectedResource || resource.id === preselectedResource.id).map((resource) => (
-              <button type="button" key={resource.id} className={`staff-card ${selectedResource?.id === resource.id ? 'selected' : ''}`} onClick={() => handleSelectResource(resource)}>
-                <div className="staff-card-content">
-                  {resource.foto || resource.foto_url ? <img src={resource.foto || resource.foto_url} alt="" /> : null}
-                  <h3>{resource.nome}</h3>
-                  {resource.bio ? <p>{resource.bio}</p> : null}
-                </div>
-              </button>
-            ))}
-          </div>
-          {resources.length === 0 ? <p className="muted">Nenhum psicólogo está vinculado a este serviço.</p> : null}
+          <button type="button" className="back-button" onClick={() => setStep(1)}>← Voltar para profissionais</button>
+          <h3>Escolha o serviço</h3>
+          {availableServices.length === 0 ? <EmptyState title="Nenhum serviço disponível" description="Ainda não há serviços disponíveis para agendamento." /> : (
+            <div className="service-grid">
+              {availableServices.map((service) => <button type="button" key={service.id} className="service-card" onClick={() => handleSelectService(service)}>{service.imagem || service.imagem_url ? <img src={service.imagem || service.imagem_url} alt="" /> : null}<strong>{service.nome}</strong>{service.descricao ? <span>{service.descricao}</span> : null}{service.duracao !== undefined ? <em>{service.duracao} min</em> : null}{service.preco !== undefined ? <b>{formatCurrency(service.preco)}</b> : null}</button>)}
+            </div>
+          )}
         </div>
       ) : null}
-
-      {step === 4 && !loading ? (
+      {step === 3 ? (
         <div className="card section-card">
-          <button type="button" className="back-button" onClick={() => setStep(3)}><span aria-hidden="true">←</span> Voltar para psicólogos</button>
+          <button type="button" className="back-button" onClick={() => setStep(2)}>← Voltar para serviços</button>
           <h3>Escolha a data e o horário</h3>
           <label>Data<input type="date" value={date} onChange={(event) => handleSelectDate(event.target.value)} /></label>
-          {date && slots.length === 0 ? <p className="muted">Não há horários disponíveis para esta data.</p> : null}
-          {slots.length > 0 ? <div className="slot-grid">{slots.map((slot) => (
-            <button type="button" key={slot.inicio || slot.id} className="slot-item" onClick={() => handleSelectSlot(slot)}>
-              <span>{slot.recurso?.nome || slot.recurso || selectedResource?.nome || 'Qualquer psicólogo'}</span>
-              <strong>{slot.inicio || slot.horario}</strong>
-            </button>
-          ))}</div> : null}
+          {date && loading ? <LoadingState message="Carregando horários disponíveis" /> : null}
+          {date && !loading && !error && slots.length === 0 ? <p className="muted">Não há horários disponíveis para esta data.</p> : null}
+          {slots.length > 0 ? <div className="slot-grid">{slots.map((slot) => <button type="button" key={slot.inicio} className="slot-item" onClick={() => handleSelectSlot(slot)}><span>{slot.recurso?.nome || selectedResource?.nome || 'Profissional'}</span><strong>{new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' }).format(new Date(slot.inicio))}</strong></button>)}</div> : null}
         </div>
       ) : null}
 
-      {step === 5 && !loading ? (
+      {step === 4 ? (
         <div className="card section-card">
-          <button type="button" className="back-button" onClick={() => setStep(4)}><span aria-hidden="true">←</span> Voltar para horários</button>
+          <button type="button" className="back-button" onClick={() => setStep(3)}>← Voltar para horários</button>
           <h3>Confirme seu agendamento</h3>
+          <p><strong>Profissional:</strong> {selectedResource?.nome || selectedSlot?.recurso?.nome || 'Qualquer profissional'}</p>
           <p><strong>Serviço:</strong> {selectedService?.nome}</p>
-          <p><strong>Psicólogo:</strong> {selectedResource?.nome || 'Qualquer um'}</p>
-          <p><strong>Data e horário:</strong> {formatDate(selectedSlot?.inicio)}</p>
+          <p><strong>Data:</strong> {date ? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeZone: 'UTC' }).format(new Date(`${date}T00:00:00Z`)) : 'Data não informada'}</p>
+          <p><strong>Horário:</strong> {selectedSlot?.horario || (selectedSlot?.inicio ? new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' }).format(new Date(selectedSlot.inicio)) : 'Horário não informado')}</p>
           {selectedService?.duracao !== undefined ? <p><strong>Duração:</strong> {selectedService.duracao} min</p> : null}
           {selectedService?.preco !== undefined ? <p><strong>Preço:</strong> {formatCurrency(selectedService.preco)}</p> : null}
           <label>Observações<textarea value={observacoes} onChange={(event) => setObservacoes(event.target.value)} /></label>
@@ -1519,8 +1527,7 @@ function AppointmentFlowPage() {
           {error ? <Alert type="danger" message={error} /> : null}
           <button type="button" className="button-primary" onClick={handleConfirm} disabled={loading}>Confirmar agendamento</button>
         </div>
-      ) : null}
-    </section>
+      ) : null}    </section>
   )
 }
 
