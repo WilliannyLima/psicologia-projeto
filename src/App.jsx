@@ -548,7 +548,7 @@ function App() {
                 </NavLink>
                 {!canAdmin ? (
                   <>
-                    <NavLink to="/agendar" onClick={closeSidebar}><span aria-hidden="true">＋</span> Agendar sessão</NavLink>
+                    {hasPermission(profile?.permissoes, 'api.add_agendamento') ? <NavLink to="/agendar" onClick={closeSidebar}><span aria-hidden="true">＋</span> Agendar sessão</NavLink> : null}
                     <NavLink to="/minhas-sessoes" onClick={closeSidebar}><span aria-hidden="true">◷</span> Minhas sessões</NavLink>
                     <NavLink to="/psicologos" onClick={closeSidebar}><span aria-hidden="true">♧</span> Profissionais</NavLink>
                   </>
@@ -594,7 +594,7 @@ function App() {
                 <NavLink to={canAdmin ? '/admin' : '/dashboard'}>Início</NavLink>
                 {!canAdmin ? (
                   <>
-                    <NavLink to="/agendar">Agendar</NavLink>
+                    {hasPermission(profile?.permissoes, 'api.add_agendamento') ? <NavLink to="/agendar">Agendar</NavLink> : null}
                     <NavLink to="/minhas-sessoes">Minhas sessões</NavLink>
                     <NavLink to="/psicologos">Psicólogos</NavLink>
                   </>
