@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
-  BrowserRouter,
   Link,
   NavLink,
   Navigate,
   Route,
   Routes,
+  useLocation,
   useNavigate,
   useParams,
 } from 'react-router-dom'
@@ -166,10 +166,25 @@ function formatStatus(status) {
   return map[status] || status || 'Sem status'
 }
 
-function PageHeader({ title, subtitle, children }) {
+function BackButton({ label = 'Voltar', to }) {
+  const navigate = useNavigate()
+
+  return (
+    <button
+      type="button"
+      className="back-button"
+      onClick={() => (to ? navigate(to) : navigate(-1))}
+    >
+      <span aria-hidden="true">←</span> {label}
+    </button>
+  )
+}
+
+function PageHeader({ title, subtitle, children, backLabel, backTo }) {
   return (
     <div className="page-header">
       <div>
+        {backLabel ? <BackButton label={backLabel} to={backTo} /> : null}
         <p className="eyebrow">Psicologia</p>
         <h1>{title}</h1>
         {subtitle ? <p className="subtitle">{subtitle}</p> : null}
@@ -213,6 +228,148 @@ function EmptyState({ title, description, action }) {
   )
 }
 
+function getProfilePhoto(profile) {
+  return profile?.foto || profile?.foto_url || profile?.avatar || profile?.avatar_url || ''
+}
+
+function formatDisplayName(name) {
+  if (!name) return 'seja bem-vindo(a)'
+  return name
+    .trim()
+    .split(/\s+/)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ')
+}
+
+function getProfessionalPhoto(professional) {
+  return professional?.foto || professional?.foto_url || professional?.imagem || professional?.imagem_url || ''
+}
+
+function ProfileAvatar({ profile, size = 'default', className = '' }) {
+  const photo = getProfilePhoto(profile)
+  const initial = (profile?.nome || 'P').charAt(0).toUpperCase()
+
+  return (
+    <span className={`profile-avatar profile-avatar-${size} ${className}`.trim()}>
+      {photo ? (
+        <img src={photo} alt={`Foto de ${profile?.nome || 'usuário'}`} />
+      ) : (
+        <span aria-hidden="true">{initial}</span>
+      )}
+    </span>
+  )
+}
+
+function ProfilePhotoUpload({ profile, onProfileChange }) {
+  const [selectedFile, setSelectedFile] = useState(null)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+  const [loading, setLoading] = useState(false)
+  const preview = useMemo(
+    () => (selectedFile ? URL.createObjectURL(selectedFile) : ''),
+    [selectedFile],
+  )
+
+  useEffect(() => {
+    return () => {
+      if (preview) URL.revokeObjectURL(preview)
+    }
+  }, [preview])
+
+  const handleFileChange = (event) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    setError('')
+    setSuccess('')
+
+    if (!file) return
+
+    const acceptedTypes = ['image/jpeg', 'image/png', 'image/webp']
+    const maxSize = 5 * 1024 * 1024
+
+    if (!acceptedTypes.includes(file.type)) {
+      setError('Escolha uma imagem JPG, JPEG, PNG ou WEBP.')
+      return
+    }
+
+    if (file.size > maxSize) {
+      setError('A imagem deve ter no máximo 5 MB.')
+      return
+    }
+
+    setSelectedFile(file)
+  }
+
+  const cancelSelection = () => {
+    setSelectedFile(null)
+    setError('')
+    setSuccess('')
+  }
+
+  const handleUpload = async () => {
+    if (!selectedFile) return
+
+    try {
+      setLoading(true)
+      setError('')
+      const body = new FormData()
+      body.append('foto', selectedFile)
+      const response = await apiRequest('/auth/eu/', { method: 'PATCH', body })
+      onProfileChange(response)
+      setSelectedFile(null)
+      setSuccess('Foto de perfil atualizada com sucesso.')
+    } catch (err) {
+      setError(err.message || 'Não foi possível atualizar sua foto.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const currentProfile = selectedFile ? { ...profile, foto: preview } : profile
+
+  return (
+    <div className="profile-photo-section">
+      <div className="profile-photo-preview">
+        <ProfileAvatar profile={currentProfile} size="profile" />
+        <label className="profile-photo-overlay" htmlFor="profile-photo-input">
+          <span aria-hidden="true">📷</span>
+          <span>{selectedFile ? 'Trocar imagem' : 'Alterar foto'}</span>
+        </label>
+      </div>
+      <div className="profile-photo-copy">
+        <p className="eyebrow">Foto de perfil</p>
+        <h2>{selectedFile ? 'Pré-visualização' : 'Personalize seu perfil'}</h2>
+        <p>Escolha uma foto para personalizar seu perfil. JPG, PNG ou WEBP, até 5 MB.</p>
+        <div className="profile-photo-actions">
+          <label className="button-secondary" htmlFor="profile-photo-input">
+            {getProfilePhoto(profile) ? 'Alterar foto' : 'Adicionar foto'}
+          </label>
+          <input
+            id="profile-photo-input"
+            className="visually-hidden"
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            aria-label="Selecionar foto de perfil"
+            onChange={handleFileChange}
+          />
+          {selectedFile ? (
+            <>
+              <button type="button" className="button-primary" onClick={handleUpload} disabled={loading}>
+                {loading ? 'Salvando...' : 'Confirmar foto'}
+              </button>
+              <button type="button" className="button-ghost" onClick={cancelSelection} disabled={loading}>
+                Cancelar
+              </button>
+            </>
+          ) : null}
+        </div>
+        {error ? <Alert type="danger" message={error} /> : null}
+        {success ? <Alert type="success" message={success} /> : null}
+      </div>
+    </div>
+  )
+}
+
 function ProtectedRoute({ isAuthenticated, children }) {
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />
@@ -225,6 +382,7 @@ function App() {
   const [tokens, setTokens] = useState(() => readStoredJSON(STORAGE_KEYS.tokens))
   const [profile, setProfile] = useState(() => readStoredJSON(STORAGE_KEYS.profile))
   const [flash, setFlash] = useState({ type: 'success', message: '' })
+  const [sidebarOpen, setSidebarOpen] = useState(false)
 
   useEffect(() => {
     writeStoredJSON(STORAGE_KEYS.tokens, tokens)
@@ -266,18 +424,66 @@ function App() {
       profile?.permissoes?.includes('change_organizacao'),
   )
 
+  const closeSidebar = () => setSidebarOpen(false)
+  const location = useLocation()
+  const isLoginPage = location.pathname === '/login'
+  const isResetPage = location.pathname === '/esqueci-minha-senha'
+
   return (
-    <BrowserRouter>
-      <div className="app-shell">
-        <header className="topbar">
-          <div className="brand-wrap">
+      <div className={`app-shell ${tokens ? 'authenticated-shell' : 'public-shell'} ${isLoginPage ? 'login-shell' : ''} ${isResetPage ? 'reset-shell' : ''}`}>
+        {tokens ? (
+          <>
+            <button
+              type="button"
+              className={`sidebar-backdrop ${sidebarOpen ? 'is-visible' : ''}`}
+              aria-label="Fechar menu"
+              onClick={closeSidebar}
+            />
+            <aside className={`sidebar ${sidebarOpen ? 'is-open' : ''}`}>
+              <Link to="/" className="brand" onClick={closeSidebar}>
+                <span className="brand-mark">P</span>
+                <span>
+                  <strong>Psicologia</strong>
+                  <small>Cuidado que acolhe</small>
+                </span>
+              </Link>
+              <p className="sidebar-label">{canAdmin ? 'Gestão' : 'Seu espaço'}</p>
+              <nav className="side-nav" aria-label="Navegação principal">
+                <NavLink to={canAdmin ? '/admin' : '/dashboard'} onClick={closeSidebar}>
+                  <span aria-hidden="true">⌂</span> Visão geral
+                </NavLink>
+                {!canAdmin ? (
+                  <>
+                    <NavLink to="/agendar" onClick={closeSidebar}><span aria-hidden="true">＋</span> Agendar sessão</NavLink>
+                    <NavLink to="/minhas-sessoes" onClick={closeSidebar}><span aria-hidden="true">◷</span> Minhas sessões</NavLink>
+                    <NavLink to="/psicologos" onClick={closeSidebar}><span aria-hidden="true">♧</span> Profissionais</NavLink>
+                  </>
+                ) : (
+                  <>
+                    <NavLink to="/admin/agenda" onClick={closeSidebar}><span aria-hidden="true">◷</span> Agenda</NavLink>
+                    <NavLink to="/admin/solicitacoes" onClick={closeSidebar}><span aria-hidden="true">!</span> A confirmar</NavLink>
+                    <NavLink to="/admin/organizacao" onClick={closeSidebar}><span aria-hidden="true">▦</span> Negócio</NavLink>
+                    <NavLink to="/admin/avaliacoes" onClick={closeSidebar}><span aria-hidden="true">★</span> Avaliações</NavLink>
+                  </>
+                )}
+                <NavLink to="/perfil" onClick={closeSidebar}><span aria-hidden="true">◯</span> Meu perfil</NavLink>
+              </nav>
+              <div className="sidebar-footer">
+                <div className="sidebar-user">
+                  <ProfileAvatar profile={profile} />
+                  <span><strong>{profile?.nome || 'Minha conta'}</strong><small>{canAdmin ? 'Administrador' : 'Paciente'}</small></span>
+                </div>
+                <button type="button" className="logout-button" onClick={logout}>↪ <span>Sair da conta</span></button>
+              </div>
+            </aside>
+          </>
+        ) : !isLoginPage ? (
+          <header className="topbar">
             <Link to="/" className="brand">
               <span className="brand-mark">P</span>
-              <span>Psicologia</span>
+              <span><strong>Psicologia</strong><small>Cuidado que acolhe</small></span>
             </Link>
-          </div>
-
-          <nav className="main-nav" aria-label="Navegação principal">
+            <nav className="main-nav" aria-label="Navegação principal">
             {!tokens ? (
               <>
                 <NavLink to="/">Início</NavLink>
@@ -307,10 +513,34 @@ function App() {
                 </button>
               </>
             )}
-          </nav>
-        </header>
+            </nav>
+          </header>
+        ) : null}
 
-        <main className="page-shell">
+        <div className="main-area">
+          {tokens ? (
+            <header className="app-header">
+              <button type="button" className="menu-toggle" onClick={() => setSidebarOpen(true)} aria-label="Abrir menu">
+                <span />
+                <span />
+                <span />
+              </button>
+              <div className="header-context">
+                <span className="header-kicker">{canAdmin ? 'Painel administrativo' : 'Espaço de cuidado'}</span>
+                <strong>{canAdmin ? 'Gestão do consultório' : `Olá, ${formatDisplayName(profile?.nome)}!`}</strong>
+                {!canAdmin ? <span className="header-description">Encontre o profissional ideal para acompanhar você.</span> : null}
+              </div>
+              <Link to="/perfil" className="header-profile">
+                <ProfileAvatar profile={profile} size="header" />
+                <span>
+                  <strong>{profile?.nome || 'Meu perfil'}</strong>
+                  <small className="header-role">Paciente</small>
+                  <small className="header-profile-link">Ver meu perfil</small>
+                </span>
+              </Link>
+            </header>
+          ) : null}
+          <main className="page-shell">
           {flash.message ? <Alert type={flash.type} message={flash.message} /> : null}
 
           <Routes>
@@ -410,9 +640,9 @@ function App() {
             />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
-        </main>
+          </main>
+        </div>
       </div>
-    </BrowserRouter>
   )
 }
 
@@ -459,6 +689,7 @@ function LoginPage({ onAuthSuccess }) {
   const [form, setForm] = useState({ organizacao: 'psicologia', email: '', senha: '' })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
 
   const handleChange = (event) => {
     const { name, value } = event.target
@@ -487,17 +718,21 @@ function LoginPage({ onAuthSuccess }) {
       onAuthSuccess(loginResponse, profileResponse)
       navigate(profileResponse.permissoes?.includes('api.change_organizacao') ? '/admin' : '/dashboard')
     } catch (err) {
-      setError(err.message)
+      setError(err?.fields?.general || 'Não foi possível entrar. Verifique seu e-mail e senha.')
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <section className="auth-panel">
+    <section className="login-layout">
+      <button type="button" className="login-back-button" onClick={() => navigate('/')}>
+        <span aria-hidden="true">←</span> Voltar para o início
+      </button>
       <div className="card auth-card">
-        <p className="eyebrow">Área do cliente</p>
+        <p className="login-kicker">Seja bem-vindo(a)</p>
         <h2>Entrar</h2>
+        <p className="login-intro">Acesse sua conta e continue seu cuidado.</p>
         <form onSubmit={handleSubmit} className="stack-form">
           <label>
             Organização
@@ -515,13 +750,23 @@ function LoginPage({ onAuthSuccess }) {
           </label>
           <label>
             Senha
-            <input
-              type="password"
-              name="senha"
-              value={form.senha}
-              onChange={handleChange}
-              required
-            />
+            <span className="password-field">
+              <input
+                type={showPassword ? 'text' : 'password'}
+                name="senha"
+                value={form.senha}
+                onChange={handleChange}
+                required
+              />
+              <button
+                type="button"
+                className="password-toggle"
+                onClick={() => setShowPassword((current) => !current)}
+                aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
+              >
+                {showPassword ? 'Ocultar' : 'Mostrar'}
+              </button>
+            </span>
           </label>
 
           {error ? <Alert type="danger" message={error} /> : null}
@@ -531,11 +776,20 @@ function LoginPage({ onAuthSuccess }) {
           </button>
         </form>
 
-        <div className="auth-links">
-          <Link to="/cadastro">Criar conta</Link>
+        <div className="login-links">
           <Link to="/esqueci-minha-senha">Esqueci minha senha</Link>
+          <p>Não tem uma conta? <Link to="/cadastro">Cadastre-se</Link></p>
         </div>
       </div>
+      <aside className="login-visual" aria-label="Mensagem de acolhimento">
+        <span className="login-visual-brand">Psicologia</span>
+        <div className="login-visual-content">
+          <span className="login-visual-mark" aria-hidden="true">✦</span>
+          <h1>Seu cuidado começa aqui.</h1>
+          <p>Cuidar da mente também é cuidar de você. Encontre apoio e acompanhe sua jornada de forma simples e acolhedora.</p>
+        </div>
+        <span className="login-visual-caption">Um espaço para você.</span>
+      </aside>
     </section>
   )
 }
@@ -632,6 +886,7 @@ function RegisterPage({ onAuthSuccess }) {
   return (
     <section className="auth-panel">
       <div className="card auth-card">
+        <BackButton label="Voltar para login" to="/login" />
         <p className="eyebrow">Cadastro</p>
         <h2>Criar conta</h2>
         <form onSubmit={handleSubmit} className="stack-form" noValidate>
@@ -696,8 +951,9 @@ function ResetPasswordPage() {
   }
 
   return (
-    <section className="auth-panel">
+    <section className="auth-panel reset-page">
       <div className="card auth-card">
+        <BackButton label="Voltar para login" to="/login" />
         <p className="eyebrow">Acesso</p>
         <h2>Esqueci minha senha</h2>
         <form onSubmit={handleSubmit} className="stack-form">
@@ -898,7 +1154,12 @@ function AppointmentFlowPage() {
 
   return (
     <section className="page-block">
-      <PageHeader title="Agendar sessão" subtitle="Escolha o serviço, os profissionais e o horário ideal." />
+      <PageHeader
+        title="Agendar sessão"
+        subtitle="Escolha o serviço, os profissionais e o horário ideal."
+        backLabel="Voltar para o painel"
+        backTo="/dashboard"
+      />
 
       {loading ? <LoadingState message="Consultando horários e serviços" /> : null}
       {error ? <Alert type="danger" message={error} /> : null}
@@ -991,7 +1252,12 @@ function MyAppointmentsPage() {
 
   return (
     <section className="page-block">
-      <PageHeader title="Minhas sessões" subtitle="Acompanhe seus atendimentos e próximos passos." />
+      <PageHeader
+        title="Minhas sessões"
+        subtitle="Acompanhe seus atendimentos e próximos passos."
+        backLabel="Voltar para o painel"
+        backTo="/dashboard"
+      />
 
       {loading ? <LoadingState message="Carregando sessões" /> : null}
       {error ? <Alert type="danger" message={error} /> : null}
@@ -1047,23 +1313,52 @@ function PsychologistsPage() {
 
   return (
     <section className="page-block">
-      <PageHeader title="Psicólogos" subtitle="Conheça a equipe e os profissionais disponíveis." />
+      <PageHeader
+        title="Psicólogos"
+        subtitle="Encontre um profissional para acompanhar sua jornada."
+        backLabel="Voltar para o painel"
+        backTo="/dashboard"
+      />
 
       {loading ? <LoadingState message="Carregando equipe" /> : null}
       {error ? <Alert type="danger" message={error} /> : null}
 
-      <div className="staff-grid">
-        {psychologists.map((professional) => (
-          <div className="card staff-card" key={professional.id}>
-            <div className="avatar-placeholder">{professional.nome?.charAt(0) || 'P'}</div>
-            <h3>{professional.nome}</h3>
-            <p>{professional.bio || 'Especialista em atendimento acolhedor.'}</p>
-            <Link to={`/psicologo/${professional.id}`} className="button-secondary">
-              Ver perfil
-            </Link>
-          </div>
-        ))}
-      </div>
+      {!loading && !error && psychologists.length === 0 ? (
+        <div className="card">
+          <EmptyState
+            title="Nenhum profissional disponível"
+            description="Ainda não há profissionais cadastrados para apresentar."
+          />
+        </div>
+      ) : null}
+
+      {!loading && !error && psychologists.length > 0 ? (
+        <div className="staff-grid">
+          {psychologists.map((professional) => {
+            const professionalProfile = {
+              nome: professional.nome,
+              foto: getProfessionalPhoto(professional),
+            }
+            const profession = professional.profissao || professional.cargo
+            const specialty = professional.especialidade || professional.especialidades
+
+            return (
+              <article className="card staff-card" key={professional.id}>
+                <ProfileAvatar profile={professionalProfile} size="professional" />
+                <div className="staff-card-content">
+                  <h3>{professional.nome || 'Profissional'}</h3>
+                  {profession ? <span className="staff-profession">{profession}</span> : null}
+                  {specialty ? <span className="staff-specialty">{specialty}</span> : null}
+                  {professional.bio ? <p>{professional.bio}</p> : null}
+                </div>
+                <Link to={`/psicologo/${professional.id}`} className="button-primary staff-card-action">
+                  Ver perfil
+                </Link>
+              </article>
+            )
+          })}
+        </div>
+      ) : null}
     </section>
   )
 }
@@ -1090,11 +1385,26 @@ function PsychologistDetailPage() {
     loadProfessional()
   }, [id])
 
-  if (loading) return <LoadingState message="Carregando perfil do psicólogo" />
-  if (error) return <Alert type="danger" message={error} />
+  if (loading) {
+    return (
+      <section className="page-block">
+        <BackButton label="Voltar para profissionais" to="/psicologos" />
+        <LoadingState message="Carregando perfil do psicólogo" />
+      </section>
+    )
+  }
+  if (error) {
+    return (
+      <section className="page-block">
+        <BackButton label="Voltar para profissionais" to="/psicologos" />
+        <Alert type="danger" message={error} />
+      </section>
+    )
+  }
 
   return (
     <section className="page-block">
+      <BackButton label="Voltar para profissionais" to="/psicologos" />
       <div className="card section-card profile-card">
         <div className="avatar-placeholder large">{professional?.nome?.charAt(0) || 'P'}</div>
         <div>
@@ -1134,7 +1444,16 @@ function ProfilePage({ profile, onProfileChange }) {
 
   return (
     <section className="page-block">
-      <PageHeader title="Meu perfil" subtitle="Atualize seus dados e mantenha seu cadastro em dia." />
+      <PageHeader
+        title="Meu perfil"
+        subtitle="Atualize seus dados e mantenha seu cadastro em dia."
+        backLabel="Voltar para o painel"
+        backTo="/dashboard"
+      />
+
+      <div className="card section-card">
+        <ProfilePhotoUpload profile={profile} onProfileChange={onProfileChange} />
+      </div>
 
       <div className="card section-card">
         <form className="stack-form" onSubmit={handleSave}>
@@ -1235,7 +1554,12 @@ function AdminAgendaPage() {
 
   return (
     <section className="page-block">
-      <PageHeader title="Agenda do dia" subtitle="Agenda e acompanhamento dos atendimentos do dia." />
+      <PageHeader
+        title="Agenda do dia"
+        subtitle="Agenda e acompanhamento dos atendimentos do dia."
+        backLabel="Voltar para administração"
+        backTo="/admin"
+      />
 
       {loading ? <LoadingState message="Consultando agenda" /> : null}
       {error ? <Alert type="danger" message={error} /> : null}
@@ -1285,7 +1609,12 @@ function AdminRequestsPage() {
 
   return (
     <section className="page-block">
-      <PageHeader title="Pedidos para confirmar" subtitle="Revise e responda às solicitações recebidas." />
+      <PageHeader
+        title="Pedidos para confirmar"
+        subtitle="Revise e responda às solicitações recebidas."
+        backLabel="Voltar para administração"
+        backTo="/admin"
+      />
 
       {loading ? <LoadingState message="Carregando solicitações" /> : null}
       {error ? <Alert type="danger" message={error} /> : null}
@@ -1363,7 +1692,12 @@ function AdminBusinessPage() {
 
   return (
     <section className="page-block">
-      <PageHeader title="Dados do negócio" subtitle="Configure a identidade e a descrição do consultório." />
+      <PageHeader
+        title="Dados do negócio"
+        subtitle="Configure a identidade e a descrição do consultório."
+        backLabel="Voltar para administração"
+        backTo="/admin"
+      />
 
       {loading ? <LoadingState message="Carregando dados do negócio" /> : null}
 
@@ -1410,7 +1744,12 @@ function AdminReviewsPage() {
 
   return (
     <section className="page-block">
-      <PageHeader title="Avaliações" subtitle="Acompanhe a satisfação dos pacientes." />
+      <PageHeader
+        title="Avaliações"
+        subtitle="Acompanhe a satisfação dos pacientes."
+        backLabel="Voltar para administração"
+        backTo="/admin"
+      />
 
       {loading ? <LoadingState message="Carregando avaliações" /> : null}
       {error ? <Alert type="danger" message={error} /> : null}
