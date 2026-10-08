@@ -501,6 +501,13 @@ function App() {
   }, [profile])
 
   useEffect(() => {
+    if (flash.message !== 'Sessão encerrada com sucesso.') return
+
+    const timeout = window.setTimeout(() => setFlash({ type: 'success', message: '' }), 5000)
+    return () => window.clearTimeout(timeout)
+  }, [flash])
+
+  useEffect(() => {
     if (!tokens?.access || profile) return
 
     const loadProfile = async () => {
@@ -520,6 +527,7 @@ function App() {
   }, [tokens?.access, profile])
 
   const handleAuthSuccess = (nextTokens, nextProfile) => {
+    setFlash({ type: 'success', message: '' })
     setTokens(nextTokens)
     setProfile(nextProfile)
   }
