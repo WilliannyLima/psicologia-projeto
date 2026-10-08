@@ -1664,7 +1664,7 @@ function AppointmentDetailPage() {
   useEffect(() => { loadAppointment() }, [id])
 
   const permissions = readStoredJSON(STORAGE_KEYS.profile)?.permissoes
-  const canReview = !Array.isArray(permissions) || permissions.includes('api.avaliar_agendamento')
+  const canReview = hasPermission(permissions, 'api.avaliar_agendamento')
   const canCancel = ['solicitado', 'confirmado'].includes(appointment?.status)
 
   const handleCancel = async () => {
