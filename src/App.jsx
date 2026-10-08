@@ -103,6 +103,12 @@ function hasPermission(permissions, permission) {
   return Array.isArray(permissions) && permissions.includes(permission)
 }
 
+function FieldErrors({ errors }) {
+  return Object.entries(errors || {})
+    .filter(([field]) => field !== 'general')
+    .map(([field, message]) => <small className="field-error" key={field}>{field}: {message}</small>)
+}
+
 function extractFieldErrors(payload) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     return {}
@@ -122,7 +128,7 @@ function extractFieldErrors(payload) {
     if (formatted) fieldErrors[key] = formatted
   })
 
-  if (Object.keys(fieldErrors).length === 0 && payload.non_field_errors) {
+  if (payload.non_field_errors) {
     const value = payload.non_field_errors
     fieldErrors.general = Array.isArray(value) ? value.join(' ') : String(value)
   }
@@ -131,7 +137,7 @@ function extractFieldErrors(payload) {
 }
 
 async function apiRequest(path, options = {}) {
-  const { _retried = false, _skipAuth = false, ...fetchOptions } = options
+  const { _retried = false, _skipAuth = false, _retryCount = 0, ...fetchOptions } = options
   const storedTokens = readStoredJSON(STORAGE_KEYS.tokens)
   const token = storedTokens?.access
   const headers = { ...(fetchOptions.headers || {}) }
@@ -154,7 +160,19 @@ async function apiRequest(path, options = {}) {
       fetchOptions.body instanceof FormData ? fetchOptions.body : JSON.stringify(fetchOptions.body)
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, requestInit)
+  let response
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, requestInit)
+  } catch (error) {
+    if (_retryCount < 2) {
+      return apiRequest(path, { ...fetchOptions, _retried, _skipAuth, _retryCount: _retryCount + 1 })
+    }
+    throw error
+  }
+
+  if (response.status >= 500 && _retryCount < 2) {
+    return apiRequest(path, { ...fetchOptions, _retried, _skipAuth, _retryCount: _retryCount + 1 })
+  }
 
   const contentType = response.headers.get('content-type') || ''
   const payload = contentType.includes('application/json')
@@ -189,6 +207,7 @@ async function apiRequest(path, options = {}) {
     const error = new Error(normalizeErrorMessage(payload))
     error.status = response.status
     error.fields = extractFieldErrors(payload)
+    if (response.status === 404) error.message = 'Não encontrado.'
     if (response.status === 403) error.message = 'Você não tem permissão para esta ação.'
     if (response.status === 429) error.message = 'Muitas tentativas, aguarde um minuto.'
     throw error
@@ -1231,6 +1250,7 @@ function AppointmentFlowPage() {
   const [slots, setSlots] = useState([])
   const [selectedSlot, setSelectedSlot] = useState(null)
   const [observacoes, setObservacoes] = useState('')
+  const [fieldErrors, setFieldErrors] = useState({})
   const [submittedAppointment, setSubmittedAppointment] = useState(null)
   const [step, setStep] = useState(2)
   const [loading, setLoading] = useState(true)
@@ -1346,6 +1366,7 @@ function AppointmentFlowPage() {
     try {
       setLoading(true)
       setError('')
+      setFieldErrors({})
       const payload = {
         servico: selectedService.id,
         ...(selectedResource?.id ? { recurso: selectedResource.id } : {}),
@@ -1362,6 +1383,7 @@ function AppointmentFlowPage() {
       setStep(6)
     } catch (err) {
       setError(err.message)
+      setFieldErrors(err.fields || {})
     } finally {
       setLoading(false)
     }
@@ -1485,6 +1507,7 @@ function AppointmentFlowPage() {
           {selectedService?.preco !== undefined ? <p><strong>Preço:</strong> {formatCurrency(selectedService.preco)}</p> : null}
           <label>Observações<textarea value={observacoes} onChange={(event) => setObservacoes(event.target.value)} /></label>
           <p className="muted">Evite informar dados pessoais ou informações sensíveis desnecessárias.</p>
+          <FieldErrors errors={fieldErrors} />
           {error ? <Alert type="danger" message={error} /> : null}
           <button type="button" className="button-primary" onClick={handleConfirm} disabled={loading}>Confirmar agendamento</button>
         </div>
@@ -1659,7 +1682,7 @@ function AppointmentDetailPage() {
       setError('')
       setAppointment(await apiRequest(`/agendamentos/${id}/`))
     } catch (err) {
-      setError(err.status === 404 ? 'Não encontrado' : err.message)
+      setError(err.message)
     } finally {
       setLoading(false)
     }
@@ -1722,6 +1745,7 @@ function ReviewAppointmentPage() {
   const [comment, setComment] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [fieldErrors, setFieldErrors] = useState({})
 
   const handleSubmit = async (event) => {
     event.preventDefault()
@@ -1732,6 +1756,7 @@ function ReviewAppointmentPage() {
     try {
       setLoading(true)
       setError('')
+      setFieldErrors({})
       await apiRequest(`/agendamentos/${id}/avaliar/`, {
         method: 'POST',
         body: { nota: rating, comentario: comment },
@@ -1739,6 +1764,7 @@ function ReviewAppointmentPage() {
       navigate(`/sessao/${id}`, { replace: true, state: { message: 'Avaliação enviada com sucesso.' } })
     } catch (err) {
       setError(err.message)
+      setFieldErrors(err.fields || {})
     } finally {
       setLoading(false)
     }
@@ -1758,6 +1784,7 @@ function ReviewAppointmentPage() {
           <p className="muted">Evite informar dados pessoais ou informações sensíveis desnecessárias.</p>
           <label>Comentário<textarea value={comment} onChange={(event) => setComment(event.target.value)} /></label>
           <p className="muted">Evite informar dados pessoais ou informações sensíveis desnecessárias.</p>
+          <FieldErrors errors={fieldErrors} />
           {error ? <Alert type="danger" message={error} /> : null}
           <button type="submit" className="button-primary" disabled={loading}>{loading ? 'Enviando...' : 'Enviar avaliação'}</button>
         </form>
@@ -1797,7 +1824,7 @@ function PsychologistDetailPage() {
       setReviews(list)
       setReviewNext(Boolean(reviewResponse?.next))
     } catch (err) {
-      setError(err.status === 404 ? 'Não encontrado' : err.message)
+      setError(err.message)
     } finally {
       setLoading(false)
     }
@@ -1860,6 +1887,20 @@ function ProfilePage({ profile, onLogout, onProfileChange }) {
   const [form, setForm] = useState({ nome: profile?.nome || '', email: profile?.email || '' })
   const [error, setError] = useState('')
   const [fieldErrors, setFieldErrors] = useState({})
+  useEffect(() => {
+    const loadProfile = async () => {
+      try {
+        const response = await apiRequest('/auth/eu/')
+        onProfileChange(response)
+        setForm({ nome: response?.nome || '', email: response?.email || '' })
+      } catch (err) {
+        setError(err.message)
+      }
+    }
+
+    loadProfile()
+  }, [])
+
   const organizationName =
     profile?.organizacao?.nome ||
     profile?.organizacao_nome ||
@@ -2097,7 +2138,7 @@ function AdminAgendaPage() {
       setLoading(true); setError('')
       const query = `/agendamentos/?data_inicio=${date}&data_fim=${date}${resourceId ? `&recurso=${resourceId}` : ''}`
       const [items, resourceList] = await Promise.all([fetchAllPages(query), apiRequest('/recursos/')])
-      setAgenda(items); setResources(responseList(resourceList))
+      setAgenda(items.sort((first, second) => new Date(first.inicio) - new Date(second.inicio))); setResources(responseList(resourceList))
     } catch (err) { setError(err.message) } finally { setLoading(false) }
   }
   useEffect(() => { load() }, [date, resourceId])
@@ -2112,14 +2153,14 @@ function AdminAgendaPage() {
 
 function AdminRequestsPage({ permissions }) {
   const [requests, setRequests] = useState([]); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [actionId, setActionId] = useState('')
-  const load = async () => { try { setLoading(true); setError(''); setRequests(await fetchAllPages('/agendamentos/?status=solicitado')) } catch (err) { setError(err.message) } finally { setLoading(false) } }
+  const load = async () => { try { setLoading(true); setError(''); setRequests((await fetchAllPages('/agendamentos/?status=solicitado')).sort((first, second) => new Date(first.inicio) - new Date(second.inicio))) } catch (err) { setError(err.message) } finally { setLoading(false) } }
   useEffect(() => { load() }, [])
   const action = async (id, endpoint) => { if (endpoint === 'cancelar' && !window.confirm('Cancelar este agendamento?')) return; try { setActionId(id); setError(''); await apiRequest(`/agendamentos/${id}/${endpoint}/`, { method: 'POST' }); await load() } catch (err) { setError(err.message) } finally { setActionId('') } }
   return <section className="page-block"><PageHeader title="Pedidos para confirmar" subtitle="Revise e responda às solicitações." backLabel="Voltar para administração" backTo="/admin" />{loading ? <LoadingState message="Carregando solicitações" /> : null}{error ? <><Alert type="danger" message={error} /><button type="button" className="button-secondary" onClick={load}>Tentar de novo</button></> : null}<div className="card section-card">{!loading && !error && requests.length === 0 ? <EmptyState title="Nenhum pedido para confirmar" description="A fila está vazia." /> : <div className="list-stack">{requests.map((item) => <div className="list-item" key={item.id}><div><strong>{item.cliente?.nome || item.cliente || 'Paciente'}</strong><p>{item.servico?.nome || item.servico || 'Sessão'} • {item.recurso?.nome || item.recurso || 'Psicólogo'} • {formatDate(item.inicio)}</p><p>{item.observacoes || 'Sem observações.'}</p></div><div className="meta-actions">{hasPermission(permissions, 'api.confirmar_agendamento') ? <button type="button" className="button-primary small-button" disabled={actionId === item.id} onClick={() => action(item.id, 'confirmar')}>Confirmar</button> : null}{hasPermission(permissions, 'api.cancelar_agendamento') ? <button type="button" className="button-secondary small-button" disabled={actionId === item.id} onClick={() => action(item.id, 'cancelar')}>Cancelar</button> : null}</div></div>)}</div>}</div></section>
 }
 
 function AdminAppointmentDetailPage({ permissions }) {
-  const { id } = useParams(); const [item, setItem] = useState(null); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [actionId, setActionId] = useState(''); const load = async () => { try { setLoading(true); setError(''); setItem(await apiRequest(`/agendamentos/${id}/`)) } catch (err) { setError(err.status === 404 ? 'Não encontrado.' : err.message) } finally { setLoading(false) } }; useEffect(() => { load() }, [id])
+  const { id } = useParams(); const [item, setItem] = useState(null); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [actionId, setActionId] = useState(''); const load = async () => { try { setLoading(true); setError(''); setItem(await apiRequest(`/agendamentos/${id}/`)) } catch (err) { setError(err.message) } finally { setLoading(false) } }; useEffect(() => { load() }, [id])
   const action = async (endpoint) => { if (endpoint === 'cancelar' && !window.confirm('Cancelar este agendamento?')) return; try { setActionId(endpoint); setError(''); await apiRequest(`/agendamentos/${id}/${endpoint}/`, { method: 'POST' }); await load() } catch (err) { setError(err.message) } finally { setActionId('') } }
   if (loading) return <section className="page-block"><BackButton label="Voltar para agenda" to="/admin/agenda" /><LoadingState message="Carregando sessão" /></section>
   if (error) return <section className="page-block"><BackButton label="Voltar para agenda" to="/admin/agenda" /><Alert type="danger" message={error} /><button type="button" className="button-secondary" onClick={load}>Tentar de novo</button></section>
@@ -2127,11 +2168,11 @@ function AdminAppointmentDetailPage({ permissions }) {
 }
 
 function AdminBusinessPage({ permissions }) {
-  const [organization, setOrganization] = useState(null); const [form, setForm] = useState({ nome: '', descricao: '' }); const [logo, setLogo] = useState(null); const [removeLogo, setRemoveLogo] = useState(false); const [loading, setLoading] = useState(true); const [saving, setSaving] = useState(false); const [error, setError] = useState(''); const [success, setSuccess] = useState('')
+  const [organization, setOrganization] = useState(null); const [form, setForm] = useState({ nome: '', descricao: '' }); const [logo, setLogo] = useState(null); const [removeLogo, setRemoveLogo] = useState(false); const [loading, setLoading] = useState(true); const [saving, setSaving] = useState(false); const [error, setError] = useState(''); const [fieldErrors, setFieldErrors] = useState({}); const [success, setSuccess] = useState('')
   const canEdit = hasPermission(permissions, 'api.change_organizacao')
   const load = async () => { try { setLoading(true); setError(''); const response = await apiRequest('/organizacao/'); setOrganization(response); setForm({ nome: response?.nome || '', descricao: response?.descricao || '' }) } catch (err) { setError(err.message) } finally { setLoading(false) } }; useEffect(() => { load() }, [])
-  const submit = async (event) => { event.preventDefault(); try { setSaving(true); setError(''); const body = new FormData(); body.append('nome', form.nome); body.append('descricao', form.descricao); if (removeLogo) body.append('logo', ''); else if (logo) body.append('logo', logo); const response = await apiRequest('/organizacao/', { method: 'PATCH', body }); setOrganization(response); setLogo(null); setRemoveLogo(false); setSuccess('Dados do negócio atualizados com sucesso.') } catch (err) { setError(err.message) } finally { setSaving(false) } }
-  return <section className="page-block"><PageHeader title="Dados do negócio" subtitle="Configure os dados da organização." backLabel="Voltar para administração" backTo="/admin" />{loading ? <LoadingState message="Carregando dados do negócio" /> : null}{error ? <><Alert type="danger" message={error} /><button type="button" className="button-secondary" onClick={load}>Tentar de novo</button></> : null}{success ? <Alert type="success" message={success} /> : null}<div className="card section-card"><form className="stack-form" onSubmit={submit}><label>Nome<input name="nome" value={form.nome} onChange={(event) => setForm({ ...form, nome: event.target.value })} disabled={!canEdit} /></label><label>Descrição<textarea name="descricao" value={form.descricao} onChange={(event) => setForm({ ...form, descricao: event.target.value })} disabled={!canEdit} /></label><label>Logo<input type="file" accept="image/*" onChange={(event) => { setLogo(event.target.files?.[0] || null); setRemoveLogo(false) }} disabled={!canEdit} /></label>{organization?.logo ? <><img className="admin-image-preview" src={organization.logo} alt="Logo da organização" /><button type="button" className="button-ghost small-button" onClick={() => { setLogo(null); setRemoveLogo(true) }} disabled={!canEdit}>Remover logo</button></> : null}{canEdit ? <button className="button-primary" disabled={saving}>{saving ? 'Salvando...' : 'Salvar alterações'}</button> : null}</form></div></section>
+  const submit = async (event) => { event.preventDefault(); try { setSaving(true); setError(''); setFieldErrors({}); const body = new FormData(); body.append('nome', form.nome); body.append('descricao', form.descricao); if (removeLogo) body.append('logo', ''); else if (logo) body.append('logo', logo); const response = await apiRequest('/organizacao/', { method: 'PATCH', body }); setOrganization(response); setLogo(null); setRemoveLogo(false); setSuccess('Dados do negócio atualizados com sucesso.') } catch (err) { setError(err.message); setFieldErrors(err.fields || {}) } finally { setSaving(false) } }
+  return <section className="page-block"><PageHeader title="Dados do negócio" subtitle="Configure os dados da organização." backLabel="Voltar para administração" backTo="/admin" />{loading ? <LoadingState message="Carregando dados do negócio" /> : null}{error ? <><Alert type="danger" message={error} /><button type="button" className="button-secondary" onClick={load}>Tentar de novo</button></> : null}{success ? <Alert type="success" message={success} /> : null}<div className="card section-card"><form className="stack-form" onSubmit={submit}><label>Nome<input name="nome" value={form.nome} onChange={(event) => setForm({ ...form, nome: event.target.value })} disabled={!canEdit} /></label><label>Descrição<textarea name="descricao" value={form.descricao} onChange={(event) => setForm({ ...form, descricao: event.target.value })} disabled={!canEdit} /></label><label>Logo<input type="file" accept="image/*" onChange={(event) => { setLogo(event.target.files?.[0] || null); setRemoveLogo(false) }} disabled={!canEdit} /></label>{organization?.logo ? <><img className="admin-image-preview" src={organization.logo} alt="Logo da organização" /><button type="button" className="button-ghost small-button" onClick={() => { setLogo(null); setRemoveLogo(true) }} disabled={!canEdit}>Remover logo</button></> : null}<FieldErrors errors={fieldErrors} />{canEdit ? <button className="button-primary" disabled={saving}>{saving ? 'Salvando...' : 'Salvar alterações'}</button> : null}</form></div></section>
 }
 
 function AdminResourcesPage({ permissions }) {
@@ -2147,15 +2188,15 @@ function AdminResourceFormPage({ permissions }) {
   const canEdit = hasPermission(permissions, editing ? 'api.change_recurso' : 'api.add_recurso')
   const load = async () => { if (!editing) return; try { const item = await apiRequest(`/recursos/${id}/`); setForm({ nome: item.nome || '', bio: item.bio || '', capacidade: item.capacidade ?? '', ativo: item.ativo !== false }) } catch (err) { setError(err.message) } finally { setLoading(false) } }; useEffect(() => { load() }, [id])
   const submit = async (event) => { event.preventDefault(); try { setSaving(true); setError(''); setFields({}); const body = new FormData(); Object.entries(form).forEach(([key, value]) => body.append(key, value)); if (photo) body.append('foto', photo); await apiRequest(editing ? `/recursos/${id}/` : '/recursos/', { method: editing ? 'PATCH' : 'POST', body }); navigate('/admin/psicologos') } catch (err) { setError(err.message); setFields(err.fields || {}) } finally { setSaving(false) } }
-  return <section className="page-block"><PageHeader title={editing ? 'Editar psicólogo' : 'Novo psicólogo'} subtitle="Preencha os dados do profissional." backLabel="Voltar para psicólogos" backTo="/admin/psicologos" />{loading ? <LoadingState message="Carregando psicólogo" /> : null}<div className="card section-card"><form className="stack-form" onSubmit={submit}><label>Nome<input value={form.nome} onChange={(event) => setForm({ ...form, nome: event.target.value })} disabled={!canEdit} />{fields.nome ? <small className="field-error">{fields.nome}</small> : null}</label><label>Bio<textarea value={form.bio} onChange={(event) => setForm({ ...form, bio: event.target.value })} disabled={!canEdit} /></label><label>Capacidade<input type="number" value={form.capacidade} onChange={(event) => setForm({ ...form, capacidade: event.target.value })} disabled={!canEdit} /></label><label>Foto<input type="file" accept="image/*" onChange={(event) => setPhoto(event.target.files?.[0] || null)} disabled={!canEdit} /></label><label><input type="checkbox" checked={form.ativo} onChange={(event) => setForm({ ...form, ativo: event.target.checked })} disabled={!canEdit} /> Ativo</label>{error ? <Alert type="danger" message={error} /> : null}{canEdit ? <button className="button-primary" disabled={saving}>{saving ? 'Salvando...' : 'Salvar'}</button> : null}</form></div></section>
+  return <section className="page-block"><PageHeader title={editing ? 'Editar psicólogo' : 'Novo psicólogo'} subtitle="Preencha os dados do profissional." backLabel="Voltar para psicólogos" backTo="/admin/psicologos" />{loading ? <LoadingState message="Carregando psicólogo" /> : null}<div className="card section-card"><form className="stack-form" onSubmit={submit}><label>Nome<input value={form.nome} onChange={(event) => setForm({ ...form, nome: event.target.value })} disabled={!canEdit} /></label><label>Bio<textarea value={form.bio} onChange={(event) => setForm({ ...form, bio: event.target.value })} disabled={!canEdit} /></label><label>Capacidade<input type="number" value={form.capacidade} onChange={(event) => setForm({ ...form, capacidade: event.target.value })} disabled={!canEdit} /></label><label>Foto<input type="file" accept="image/*" onChange={(event) => setPhoto(event.target.files?.[0] || null)} disabled={!canEdit} /></label><label><input type="checkbox" checked={form.ativo} onChange={(event) => setForm({ ...form, ativo: event.target.checked })} disabled={!canEdit} /> Ativo</label><FieldErrors errors={fields} />{error ? <Alert type="danger" message={error} /> : null}{canEdit ? <button className="button-primary" disabled={saving}>{saving ? 'Salvando...' : 'Salvar'}</button> : null}</form></div></section>
 }
 
 function AdminAvailabilityPage({ permissions }) {
-  const { id } = useParams(); const [items, setItems] = useState([]); const [form, setForm] = useState({ weekday: '0', start: '', end: '' }); const [editing, setEditing] = useState(null); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const canEdit = hasPermission(permissions, 'api.add_disponibilidade') || hasPermission(permissions, 'api.change_disponibilidade')
+  const { id } = useParams(); const [items, setItems] = useState([]); const [form, setForm] = useState({ weekday: '0', start: '', end: '' }); const [editing, setEditing] = useState(null); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [fieldErrors, setFieldErrors] = useState({}); const canEdit = hasPermission(permissions, 'api.add_disponibilidade') || hasPermission(permissions, 'api.change_disponibilidade')
   const load = async () => { try { setLoading(true); setError(''); setItems(await fetchAllPages(`/disponibilidades/?recurso=${id}`)) } catch (err) { setError(err.message) } finally { setLoading(false) } }; useEffect(() => { load() }, [id])
-  const submit = async (event) => { event.preventDefault(); if (!form.start || !form.end || form.start >= form.end) { setError('Informe um intervalo de horário válido.'); return } try { setError(''); await apiRequest(editing ? `/disponibilidades/${editing}/` : '/disponibilidades/', { method: editing ? 'PATCH' : 'POST', body: { ...form, recurso: id } }); setEditing(null); setForm({ weekday: '0', start: '', end: '' }); await load() } catch (err) { setError(err.message) } }
+  const submit = async (event) => { event.preventDefault(); setFieldErrors({}); if (!form.start || !form.end || form.start >= form.end) { setError('Informe um intervalo de horário válido.'); return } try { setError(''); await apiRequest(editing ? `/disponibilidades/${editing}/` : '/disponibilidades/', { method: editing ? 'PATCH' : 'POST', body: { ...form, recurso: id } }); setEditing(null); setForm({ weekday: '0', start: '', end: '' }); await load() } catch (err) { setError(err.message); setFieldErrors(err.fields || {}) } }
   const remove = async (item) => { if (!window.confirm('Excluir este horário?')) return; try { await apiRequest(`/disponibilidades/${item.id}/`, { method: 'DELETE' }); await load() } catch (err) { setError(err.message) } }
-  return <section className="page-block"><PageHeader title="Horários do psicólogo" subtitle="Gerencie as disponibilidades." backLabel="Voltar para psicólogos" backTo="/admin/psicologos" />{error ? <Alert type="danger" message={error} /> : null}{loading ? <LoadingState message="Carregando horários" /> : null}<div className="card section-card"><form className="date-row" onSubmit={submit}><label>Dia<select value={form.weekday} onChange={(event) => setForm({ ...form, weekday: event.target.value })}><option value="0">Domingo</option><option value="1">Segunda-feira</option><option value="2">Terça-feira</option><option value="3">Quarta-feira</option><option value="4">Quinta-feira</option><option value="5">Sexta-feira</option><option value="6">Sábado</option></select></label><label>Início<input type="time" value={form.start} onChange={(event) => setForm({ ...form, start: event.target.value })} /></label><label>Fim<input type="time" value={form.end} onChange={(event) => setForm({ ...form, end: event.target.value })} /></label>{canEdit ? <button className="button-primary">{editing ? 'Atualizar' : 'Adicionar'}</button> : null}</form><div className="list-stack">{items.map((item) => <div className="list-item" key={item.id}><span>{['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'][item.weekday]} • {item.start}–{item.end}</span><div className="meta-actions">{canEdit ? <button className="button-secondary small-button" onClick={() => { setEditing(item.id); setForm({ weekday: String(item.weekday), start: item.start, end: item.end }) }}>Editar</button> : null}{hasPermission(permissions, 'api.delete_disponibilidade') ? <button className="button-ghost small-button" onClick={() => remove(item)}>Excluir</button> : null}</div></div>)}</div></div></section>
+  return <section className="page-block"><PageHeader title="Horários do psicólogo" subtitle="Gerencie as disponibilidades." backLabel="Voltar para psicólogos" backTo="/admin/psicologos" />{error ? <Alert type="danger" message={error} /> : null}{loading ? <LoadingState message="Carregando horários" /> : null}<div className="card section-card"><form className="date-row" onSubmit={submit}><label>Dia<select value={form.weekday} onChange={(event) => setForm({ ...form, weekday: event.target.value })}><option value="0">Domingo</option><option value="1">Segunda-feira</option><option value="2">Terça-feira</option><option value="3">Quarta-feira</option><option value="4">Quinta-feira</option><option value="5">Sexta-feira</option><option value="6">Sábado</option></select></label><label>Início<input type="time" value={form.start} onChange={(event) => setForm({ ...form, start: event.target.value })} /></label><label>Fim<input type="time" value={form.end} onChange={(event) => setForm({ ...form, end: event.target.value })} /></label><FieldErrors errors={fieldErrors} />{canEdit ? <button className="button-primary">{editing ? 'Atualizar' : 'Adicionar'}</button> : null}</form><div className="list-stack">{items.map((item) => <div className="list-item" key={item.id}><span>{['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'][item.weekday]} • {item.start}–{item.end}</span><div className="meta-actions">{canEdit ? <button className="button-secondary small-button" onClick={() => { setEditing(item.id); setForm({ weekday: String(item.weekday), start: item.start, end: item.end }) }}>Editar</button> : null}{hasPermission(permissions, 'api.delete_disponibilidade') ? <button className="button-ghost small-button" onClick={() => remove(item)}>Excluir</button> : null}</div></div>)}</div></div></section>
 }
 
 function AdminServicesPage({ permissions }) {
@@ -2166,17 +2207,17 @@ function AdminServicesPage({ permissions }) {
 }
 
 function AdminServiceFormPage({ permissions }) {
-  const { id } = useParams(); const navigate = useNavigate(); const editing = Boolean(id); const [resources, setResources] = useState([]); const [form, setForm] = useState({ nome: '', descricao: '', duracao: '', preco: '', ativo: true, recursos: [] }); const [image, setImage] = useState(null); const [loading, setLoading] = useState(editing); const [saving, setSaving] = useState(false); const [error, setError] = useState(''); const canEdit = hasPermission(permissions, editing ? 'api.change_servico' : 'api.add_servico')
+  const { id } = useParams(); const navigate = useNavigate(); const editing = Boolean(id); const [resources, setResources] = useState([]); const [form, setForm] = useState({ nome: '', descricao: '', duracao: '', preco: '', ativo: true, recursos: [] }); const [image, setImage] = useState(null); const [loading, setLoading] = useState(editing); const [saving, setSaving] = useState(false); const [error, setError] = useState(''); const [fields, setFields] = useState({}); const canEdit = hasPermission(permissions, editing ? 'api.change_servico' : 'api.add_servico')
   useEffect(() => { Promise.all([apiRequest('/recursos/'), editing ? apiRequest(`/servicos/${id}/`) : Promise.resolve(null)]).then(([resourceResponse, service]) => { setResources(responseList(resourceResponse)); if (service) setForm({ nome: service.nome || '', descricao: service.descricao || '', duracao: service.duracao || '', preco: service.preco || '', ativo: service.ativo !== false, recursos: (service.recursos || service.recursos_ids || []).map((resource) => resource.id || resource) }) }).catch((err) => setError(err.message)).finally(() => setLoading(false)) }, [id])
-  const submit = async (event) => { event.preventDefault(); try { setSaving(true); const body = new FormData(); Object.entries(form).forEach(([key, value]) => body.append(key, Array.isArray(value) ? JSON.stringify(value) : value)); if (image) body.append('imagem', image); await apiRequest(editing ? `/servicos/${id}/` : '/servicos/', { method: editing ? 'PATCH' : 'POST', body }); navigate('/admin/servicos') } catch (err) { setError(err.message) } finally { setSaving(false) } }
-  return <section className="page-block"><PageHeader title={editing ? 'Editar serviço' : 'Novo serviço'} subtitle="Configure os dados do serviço." backLabel="Voltar para serviços" backTo="/admin/servicos" />{loading ? <LoadingState message="Carregando serviço" /> : null}<div className="card section-card"><form className="stack-form" onSubmit={submit}><label>Nome<input value={form.nome} onChange={(event) => setForm({ ...form, nome: event.target.value })} disabled={!canEdit} /></label><label>Descrição<textarea value={form.descricao} onChange={(event) => setForm({ ...form, descricao: event.target.value })} disabled={!canEdit} /></label><label>Duração<input type="number" value={form.duracao} onChange={(event) => setForm({ ...form, duracao: event.target.value })} disabled={!canEdit} /></label><label>Preço<input type="number" step="0.01" value={form.preco} onChange={(event) => setForm({ ...form, preco: event.target.value })} disabled={!canEdit} /></label><label>Imagem<input type="file" accept="image/*" onChange={(event) => setImage(event.target.files?.[0] || null)} disabled={!canEdit} /></label><label><input type="checkbox" checked={form.ativo} onChange={(event) => setForm({ ...form, ativo: event.target.checked })} disabled={!canEdit} /> Ativo</label><fieldset><legend>Psicólogos</legend>{resources.map((resource) => <label key={resource.id}><input type="checkbox" checked={form.recursos.includes(resource.id)} onChange={(event) => setForm({ ...form, recursos: event.target.checked ? [...form.recursos, resource.id] : form.recursos.filter((value) => value !== resource.id) })} /> {resource.nome}</label>)}</fieldset>{error ? <Alert type="danger" message={error} /> : null}{canEdit ? <button className="button-primary" disabled={saving}>{saving ? 'Salvando...' : 'Salvar'}</button> : null}</form></div></section>
+  const submit = async (event) => { event.preventDefault(); try { setSaving(true); setError(''); setFields({}); const body = new FormData(); Object.entries(form).forEach(([key, value]) => body.append(key, Array.isArray(value) ? JSON.stringify(value) : value)); if (image) body.append('imagem', image); await apiRequest(editing ? `/servicos/${id}/` : '/servicos/', { method: editing ? 'PATCH' : 'POST', body }); navigate('/admin/servicos') } catch (err) { setError(err.message); setFields(err.fields || {}) } finally { setSaving(false) } }
+  return <section className="page-block"><PageHeader title={editing ? 'Editar serviço' : 'Novo serviço'} subtitle="Configure os dados do serviço." backLabel="Voltar para serviços" backTo="/admin/servicos" />{loading ? <LoadingState message="Carregando serviço" /> : null}<div className="card section-card"><form className="stack-form" onSubmit={submit}><label>Nome<input value={form.nome} onChange={(event) => setForm({ ...form, nome: event.target.value })} disabled={!canEdit} /></label><label>Descrição<textarea value={form.descricao} onChange={(event) => setForm({ ...form, descricao: event.target.value })} disabled={!canEdit} /></label><label>Duração<input type="number" value={form.duracao} onChange={(event) => setForm({ ...form, duracao: event.target.value })} disabled={!canEdit} /></label><label>Preço<input type="number" step="0.01" value={form.preco} onChange={(event) => setForm({ ...form, preco: event.target.value })} disabled={!canEdit} /></label><label>Imagem<input type="file" accept="image/*" onChange={(event) => setImage(event.target.files?.[0] || null)} disabled={!canEdit} /></label><label><input type="checkbox" checked={form.ativo} onChange={(event) => setForm({ ...form, ativo: event.target.checked })} disabled={!canEdit} /> Ativo</label><fieldset><legend>Psicólogos</legend>{resources.map((resource) => <label key={resource.id}><input type="checkbox" checked={form.recursos.includes(resource.id)} onChange={(event) => setForm({ ...form, recursos: event.target.checked ? [...form.recursos, resource.id] : form.recursos.filter((value) => value !== resource.id) })} /> {resource.nome}</label>)}</fieldset><FieldErrors errors={fields} />{error ? <Alert type="danger" message={error} /> : null}{canEdit ? <button className="button-primary" disabled={saving}>{saving ? 'Salvando...' : 'Salvar'}</button> : null}</form></div></section>
 }
 
 function AdminReviewsPage() {
   const [reviews, setReviews] = useState([]); const [resources, setResources] = useState([]); const [resourceId, setResourceId] = useState(''); const [rating, setRating] = useState(''); const [next, setNext] = useState(false); const [page, setPage] = useState(1); const [loading, setLoading] = useState(true); const [error, setError] = useState('')
   const load = async (append = false) => { try { setLoading(true); setError(''); const query = `/avaliacoes/?${resourceId ? `recurso=${resourceId}&` : ''}${rating ? `nota=${rating}&` : ''}page=${append ? page + 1 : 1}`; const [response, resourceResponse] = await Promise.all([apiRequest(query), resources.length ? Promise.resolve(resources) : apiRequest('/recursos/')]); const list = responseList(response); setReviews((current) => append ? [...current, ...list] : list); setNext(Boolean(response?.next)); setPage(append ? page + 1 : 1); if (!resources.length) setResources(responseList(resourceResponse)) } catch (err) { setError(err.message) } finally { setLoading(false) } }
   useEffect(() => { load() }, [resourceId, rating])
-  return <section className="page-block"><PageHeader title="Avaliações" subtitle="Acompanhe a satisfação dos pacientes." backLabel="Voltar para administração" backTo="/admin" /><div className="date-row"><label>Psicólogo<select value={resourceId} onChange={(event) => setResourceId(event.target.value)}><option value="">Todos</option>{resources.map((resource) => <option value={resource.id} key={resource.id}>{resource.nome}</option>)}</select></label><label>Nota<select value={rating} onChange={(event) => setRating(event.target.value)}><option value="">Todas</option>{[1, 2, 3, 4, 5].map((value) => <option value={value} key={value}>{value}</option>)}</select></label></div>{loading ? <LoadingState message="Carregando avaliações" /> : null}{error ? <><Alert type="danger" message={error} /><button className="button-secondary" onClick={() => load()}>Tentar de novo</button></> : null}<div className="card section-card">{!loading && !error && !reviews.length ? <EmptyState title="Ainda sem avaliações" description="Nenhuma avaliação corresponde aos filtros." /> : <div className="list-stack">{reviews.map((item) => <div className="list-item" key={item.id}><div><strong>{item.nota}/5 • {item.recurso?.nome || item.recurso || 'Profissional'}</strong><p>{item.comentario || 'Sem comentário.'}</p></div></div>)}{next ? <button className="button-secondary" onClick={() => load(true)}>Carregar mais</button> : null}</div>}</div></section>
+  return <section className="page-block"><PageHeader title="Avaliações" subtitle="Acompanhe a satisfação dos pacientes." backLabel="Voltar para administração" backTo="/admin" /><div className="date-row"><label>Psicólogo<select value={resourceId} onChange={(event) => setResourceId(event.target.value)}><option value="">Todos</option>{resources.map((resource) => <option value={resource.id} key={resource.id}>{resource.nome}</option>)}</select></label><label>Nota<select value={rating} onChange={(event) => setRating(event.target.value)}><option value="">Todas</option>{[1, 2, 3, 4, 5].map((value) => <option value={value} key={value}>{value}</option>)}</select></label></div>{loading ? <LoadingState message="Carregando avaliações" /> : null}{error ? <><Alert type="danger" message={error} /><button className="button-secondary" onClick={() => load()}>Tentar de novo</button></> : null}<div className="card section-card">{!loading && !error && !reviews.length ? <EmptyState title="Ainda sem avaliações" description="Nenhuma avaliação corresponde aos filtros." /> : <div className="list-stack">{reviews.map((item) => <div className="list-item" key={item.id}><div><strong>{item.nota}/5 • {item.recurso?.nome || item.recurso || 'Profissional'}</strong><p>{item.comentario || 'Sem comentário.'}</p><p><strong>Paciente:</strong> {item.cliente?.nome || item.cliente || 'Não informado'}</p><p><strong>Serviço:</strong> {item.servico?.nome || item.servico || 'Não informado'}</p></div></div>)}{next ? <button className="button-secondary" onClick={() => load(true)}>Carregar mais</button> : null}</div>}</div></section>
 }
 
 export default App
