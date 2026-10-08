@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Link,
   NavLink,
@@ -1233,6 +1233,7 @@ function AppointmentFlowPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [loaded, setLoaded] = useState(false)
+  const slotsRequestId = useRef(0)
   const preselectedResource = location.state?.resource || null
 
   const listResponse = (response) =>
@@ -1263,6 +1264,7 @@ function AppointmentFlowPage() {
   }, [])
 
   const handleSelectService = (service) => {
+    slotsRequestId.current += 1
     setSelectedService(service)
     setSelectedResource(preselectedResource)
     setResources([])
@@ -1296,20 +1298,24 @@ function AppointmentFlowPage() {
     setStep(4)
   }
 
-  const loadSlots = async () => {
-    if (!selectedService || !date) return
+  const loadSlots = async (selectedDate = date) => {
+    if (!selectedService || !selectedDate) return
+    const requestId = ++slotsRequestId.current
+
     try {
       setLoading(true)
       setError('')
       const result = await apiRequest(
-        `/horarios-livres/?servico=${selectedService.id}&data=${date}${selectedResource?.id ? `&recurso=${selectedResource.id}` : ''}`,
+        `/horarios-livres/?servico=${selectedService.id}&data=${selectedDate}${selectedResource?.id ? `&recurso=${selectedResource.id}` : ''}`,
       )
+      if (requestId !== slotsRequestId.current) return
       setSlots(listResponse(result))
       setSelectedSlot(null)
     } catch (err) {
+      if (requestId !== slotsRequestId.current) return
       setError(err.message)
     } finally {
-      setLoading(false)
+      if (requestId === slotsRequestId.current) setLoading(false)
     }
   }
 
@@ -1317,8 +1323,9 @@ function AppointmentFlowPage() {
     setDate(value)
     setSlots([])
     setSelectedSlot(null)
+    slotsRequestId.current += 1
     if (value) {
-      setTimeout(() => loadSlots(), 0)
+      loadSlots(value)
     }
   }
 
