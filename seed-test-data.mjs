@@ -175,6 +175,37 @@ async function criarDisponibilidade(token, disponibilidade) {
   });
 }
 
+async function obterOuCriarDisponibilidade(token, disponibilidade) {
+  const resposta = await request(
+    `/disponibilidades/?recurso=${disponibilidade.recurso}`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }
+  );
+
+  const lista = Array.isArray(resposta)
+    ? resposta
+    : resposta.results || [];
+
+  const existente = lista.find(item =>
+    Number(item.recurso?.id || item.recurso) === Number(disponibilidade.recurso) &&
+    Number(item.dia_semana) === Number(disponibilidade.dia_semana) &&
+    String(item.hora_inicio).slice(0, 5) === disponibilidade.hora_inicio &&
+    String(item.hora_fim).slice(0, 5) === disponibilidade.hora_fim
+  );
+
+  if (existente) {
+    console.log(`• Disponibilidade já existe — recurso ${disponibilidade.recurso}`);
+    return existente;
+  }
+
+  const criada = await criarDisponibilidade(token, disponibilidade);
+  console.log(`✓ Disponibilidade criada — recurso ${disponibilidade.recurso}`);
+  return criada;
+}
+
 async function criarServico(token, servico) {
   const form = new FormData();
 
@@ -217,6 +248,34 @@ async function obterOuCriarServico(token, dados) {
   );
 
   if (existente) {
+    const detalhes = await request(`/servicos/${existente.id}/`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    const recursosExistentes = (
+      detalhes.recursos || detalhes.recursos_ids || existente.recursos || existente.recursos_ids || []
+    ).map(recurso => Number(recurso.id || recurso));
+    const recursosAtualizados = [...new Set([
+      ...recursosExistentes,
+      ...dados.recursos.map(Number),
+    ])];
+
+    if (recursosAtualizados.length > recursosExistentes.length) {
+      const form = new FormData();
+      recursosAtualizados.forEach(recurso => form.append('recursos', String(recurso)));
+
+      await request(`/servicos/${existente.id}/`, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: form,
+      });
+
+      console.log(`• Recursos atualizados no serviço: ${dados.nome}`);
+    }
+
     console.log(
       `• Serviço já existe: ${dados.nome} — ID ${existente.id}`
     );
@@ -242,6 +301,55 @@ async function criarAgendamento(token, dados) {
     },
     body: JSON.stringify(dados),
   });
+}
+
+async function listarAgendamentos(token) {
+  const resposta = await request('/agendamentos/', {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  return Array.isArray(resposta)
+    ? resposta
+    : resposta.results || [];
+}
+
+async function obterIdPaciente(token) {
+  const perfil = await request('/auth/eu/', {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  return Number(perfil.id || perfil.cliente?.id || perfil.user?.id);
+}
+
+function normalizarDataHora(valor) {
+  const data = new Date(valor);
+  return Number.isNaN(data.getTime())
+    ? String(valor || '').replace(' ', 'T').slice(0, 19)
+    : data.getTime();
+}
+
+async function obterOuCriarAgendamento(token, dados, nome) {
+  const existentes = await listarAgendamentos(token);
+  const existente = existentes.find(item =>
+    Number(item.cliente?.id ?? item.cliente ?? item.paciente?.id ?? item.paciente ?? item.cliente_id ?? item.paciente_id) === Number(dados.cliente) &&
+    Number(item.servico?.id ?? item.servico) === Number(dados.servico) &&
+    Number(item.recurso?.id ?? item.recurso) === Number(dados.recurso) &&
+    normalizarDataHora(item.inicio) === normalizarDataHora(dados.inicio)
+  );
+
+  if (existente) {
+    console.log(`• Agendamento já existe — ${nome}`);
+    return existente;
+  }
+
+  const { cliente, ...dadosParaCriar } = dados;
+  const criado = await criarAgendamento(token, dadosParaCriar);
+  console.log(`✓ Agendamento criado — ${nome}`);
+  return criado;
 }
 
 function proximaData(diaSemana, hora, minuto = 0) {
@@ -403,6 +511,36 @@ async function main() {
     }
   );
 
+  const juliana = await obterOuCriarRecurso(
+    adminToken,
+    {
+      nome: 'Dra. Juliana Mendes',
+      bio: 'Psicóloga clínica com atuação em saúde emocional e acompanhamento individual.',
+      capacidade: 1,
+      ativo: true,
+    }
+  );
+
+  const felipe = await obterOuCriarRecurso(
+    adminToken,
+    {
+      nome: 'Dr. Felipe Almeida',
+      bio: 'Psicólogo com atuação em desenvolvimento emocional e acompanhamento psicológico.',
+      capacidade: 1,
+      ativo: true,
+    }
+  );
+
+  const beatriz = await obterOuCriarRecurso(
+    adminToken,
+    {
+      nome: 'Dra. Beatriz Carvalho',
+      bio: 'Psicóloga com atuação em avaliação e orientação psicológica individual.',
+      capacidade: 1,
+      ativo: true,
+    }
+  );
+
   console.log('');
 
   // ==========================================
@@ -467,17 +605,49 @@ async function main() {
       hora_fim: '18:00',
       recurso: rafael.id,
     },
+    {
+      dia_semana: 0,
+      hora_inicio: '08:00',
+      hora_fim: '12:00',
+      recurso: juliana.id,
+    },
+    {
+      dia_semana: 3,
+      hora_inicio: '13:00',
+      hora_fim: '17:00',
+      recurso: juliana.id,
+    },
+    {
+      dia_semana: 2,
+      hora_inicio: '08:00',
+      hora_fim: '12:00',
+      recurso: felipe.id,
+    },
+    {
+      dia_semana: 5,
+      hora_inicio: '13:00',
+      hora_fim: '17:00',
+      recurso: felipe.id,
+    },
+    {
+      dia_semana: 1,
+      hora_inicio: '13:00',
+      hora_fim: '17:00',
+      recurso: beatriz.id,
+    },
+    {
+      dia_semana: 4,
+      hora_inicio: '08:00',
+      hora_fim: '12:00',
+      recurso: beatriz.id,
+    },
   ];
 
   for (const disponibilidade of disponibilidades) {
     try {
-      await criarDisponibilidade(
+      await obterOuCriarDisponibilidade(
         adminToken,
         disponibilidade
-      );
-
-      console.log(
-        `✓ Disponibilidade criada — recurso ${disponibilidade.recurso}`
       );
     } catch (error) {
       console.log(
@@ -506,6 +676,9 @@ async function main() {
         recursos: [
           camila.id,
           rafael.id,
+          juliana.id,
+          felipe.id,
+          beatriz.id,
         ],
       }
     );
@@ -521,6 +694,8 @@ async function main() {
         preco: 150,
         recursos: [
           camila.id,
+          juliana.id,
+          beatriz.id,
         ],
       }
     );
@@ -536,6 +711,7 @@ async function main() {
         preco: 130,
         recursos: [
           rafael.id,
+          felipe.id,
         ],
       }
     );
@@ -552,6 +728,9 @@ async function main() {
         recursos: [
           camila.id,
           rafael.id,
+          juliana.id,
+          felipe.id,
+          beatriz.id,
         ],
       }
     );
@@ -583,6 +762,11 @@ async function main() {
     );
   }
 
+  const idsPacientes = {};
+  for (const [email, token] of Object.entries(tokensPacientes)) {
+    idsPacientes[email] = await obterIdPaciente(token);
+  }
+
   const agendamentos = [];
 
   const dadosAgendamentos = [
@@ -591,6 +775,8 @@ async function main() {
         'Ana → Camila → Consulta → solicitado',
 
       token: anaToken,
+
+      cliente: idsPacientes['ana.teste@example.com'],
 
       servico: consulta.id,
 
@@ -609,6 +795,8 @@ async function main() {
 
       token: lucasToken,
 
+      cliente: idsPacientes['lucas.teste@example.com'],
+
       servico: avaliacao.id,
 
       recurso: camila.id,
@@ -625,6 +813,8 @@ async function main() {
         'Marina → Camila → Orientação → concluído',
 
       token: marinaToken,
+
+      cliente: idsPacientes['marina.teste@example.com'],
 
       servico: orientacao.id,
 
@@ -643,6 +833,8 @@ async function main() {
 
       token: anaToken,
 
+      cliente: idsPacientes['ana.teste@example.com'],
+
       servico: acompanhamento.id,
 
       recurso: rafael.id,
@@ -658,25 +850,25 @@ async function main() {
   for (const dados of dadosAgendamentos) {
     try {
       const criado =
-        await criarAgendamento(
+        await obterOuCriarAgendamento(
           dados.token,
           {
+            cliente: dados.cliente,
             servico: dados.servico,
             recurso: dados.recurso,
             inicio: dados.inicio,
             observacoes:
               dados.observacoes,
-          }
+          },
+          dados.nome
         );
 
       agendamentos.push({
         ...dados,
+        ...criado,
         id: criado.id,
       });
 
-      console.log(
-        `✓ ${dados.nome} — ID ${criado.id}`
-      );
     } catch (error) {
       console.log(
         `✗ ${dados.nome}: ${error.message}`
@@ -711,15 +903,17 @@ async function main() {
           'confirmado'
         )
       ) {
-        await alterarAgendamento(
-          adminToken,
-          agendamento.id,
-          'confirmar'
-        );
+        if (agendamento.status !== 'confirmado') {
+          await alterarAgendamento(
+            adminToken,
+            agendamento.id,
+            'confirmar'
+          );
 
-        console.log(
-          `✓ Confirmado — ${agendamento.id}`
-        );
+          console.log(
+            `✓ Confirmado — ${agendamento.id}`
+          );
+        }
       }
 
       if (
@@ -727,22 +921,30 @@ async function main() {
           'concluído'
         )
       ) {
-        await alterarAgendamento(
-          adminToken,
-          agendamento.id,
-          'confirmar'
-        );
+        if (agendamento.status !== 'concluido') {
+          if (agendamento.status !== 'confirmado') {
+            await alterarAgendamento(
+              adminToken,
+              agendamento.id,
+              'confirmar'
+            );
+          }
 
-        await alterarAgendamento(
-          adminToken,
-          agendamento.id,
-          'concluir'
-        );
+          await alterarAgendamento(
+            adminToken,
+            agendamento.id,
+            'concluir'
+          );
+        }
 
-        await avaliarAgendamento(
-          marinaToken,
-          agendamento.id
-        );
+        const avaliacao = agendamento.avaliacao || agendamento.avaliacoes?.[0];
+        const jaAvaliado = agendamento.nota !== undefined && agendamento.nota !== null || Boolean(avaliacao);
+        if (!jaAvaliado) {
+          await avaliarAgendamento(
+            marinaToken,
+            agendamento.id
+          );
+        }
 
         console.log(
           `✓ Concluído + avaliação 5 — ${agendamento.id}`
@@ -754,15 +956,17 @@ async function main() {
           'cancelado'
         )
       ) {
-        await alterarAgendamento(
-          anaToken,
-          agendamento.id,
-          'cancelar'
-        );
+        if (agendamento.status !== 'cancelado') {
+          await alterarAgendamento(
+            anaToken,
+            agendamento.id,
+            'cancelar'
+          );
 
-        console.log(
-          `✓ Cancelado — ${agendamento.id}`
-        );
+          console.log(
+            `✓ Cancelado — ${agendamento.id}`
+          );
+        }
       }
     } catch (error) {
       console.log(
