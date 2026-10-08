@@ -1484,6 +1484,7 @@ function AppointmentFlowPage() {
           {selectedService?.duracao !== undefined ? <p><strong>Duração:</strong> {selectedService.duracao} min</p> : null}
           {selectedService?.preco !== undefined ? <p><strong>Preço:</strong> {formatCurrency(selectedService.preco)}</p> : null}
           <label>Observações<textarea value={observacoes} onChange={(event) => setObservacoes(event.target.value)} /></label>
+          <p className="muted">Evite informar dados pessoais ou informações sensíveis desnecessárias.</p>
           {error ? <Alert type="danger" message={error} /> : null}
           <button type="button" className="button-primary" onClick={handleConfirm} disabled={loading}>Confirmar agendamento</button>
         </div>
@@ -1754,7 +1755,9 @@ function ReviewAppointmentPage() {
               {[1, 2, 3, 4, 5].map((value) => <button type="button" key={value} className={rating === value ? 'button-primary' : 'button-secondary'} onClick={() => setRating(value)}>{value}</button>)}
             </div>
           </fieldset>
+          <p className="muted">Evite informar dados pessoais ou informações sensíveis desnecessárias.</p>
           <label>Comentário<textarea value={comment} onChange={(event) => setComment(event.target.value)} /></label>
+          <p className="muted">Evite informar dados pessoais ou informações sensíveis desnecessárias.</p>
           {error ? <Alert type="danger" message={error} /> : null}
           <button type="submit" className="button-primary" disabled={loading}>{loading ? 'Enviando...' : 'Enviar avaliação'}</button>
         </form>
