@@ -646,7 +646,10 @@ function App() {
 
           <Routes>
             <Route path="/" element={<LandingPage />} />
-            <Route path="/login" element={<LoginPage onAuthSuccess={handleAuthSuccess} />} />
+            <Route
+              path="/login"
+              element={tokens ? (profile ? <Navigate to={canAdmin ? '/admin' : '/dashboard'} replace /> : null) : <LoginPage onAuthSuccess={handleAuthSuccess} />}
+            />
             <Route path="/cadastro" element={<RegisterPage onAuthSuccess={handleAuthSuccess} />} />
             <Route path="/esqueci-minha-senha" element={<ResetPasswordPage />} />
 
