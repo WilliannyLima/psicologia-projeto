@@ -1284,6 +1284,7 @@ function AppointmentFlowPage() {
   const [resources, setResources] = useState([])
   const [selectedResource, setSelectedResource] = useState(location.state?.resource || null)
   const [date, setDate] = useState('')
+  const [dateError, setDateError] = useState('')
   const [slots, setSlots] = useState([])
   const [selectedSlot, setSelectedSlot] = useState(null)
   const [observacoes, setObservacoes] = useState('')
@@ -1294,6 +1295,7 @@ function AppointmentFlowPage() {
   const [error, setError] = useState('')
   const [loaded, setLoaded] = useState(false)
   const slotsRequestId = useRef(0)
+  const dateInputRef = useRef(null)
   const preselectedResource = location.state?.resource || null
   const hoje = new Date()
   const min = formatLocalDate(hoje)
@@ -1357,6 +1359,8 @@ function AppointmentFlowPage() {
     setSelectedResource(resource)
     setSelectedService(null)
     setDate('')
+    setDateError('')
+    if (dateInputRef.current) dateInputRef.current.value = ''
     setSlots([])
     setSelectedSlot(null)
     setError('')
@@ -1383,6 +1387,8 @@ function AppointmentFlowPage() {
   const handleSelectService = async (service) => {
     setSelectedService(service)
     setDate('')
+    setDateError('')
+    if (dateInputRef.current) dateInputRef.current.value = ''
     setSlots([])
     setSelectedSlot(null)
     setStep(3)
@@ -1413,8 +1419,20 @@ function AppointmentFlowPage() {
   const loadSlots = (selectedDate = date) => loadSlotsFor(selectedService, selectedResource, selectedDate)
 
   const handleSelectDate = (value) => {
-    if (value.length !== 10 || Number(value.slice(0, 4)) < 2000 || value < min) return
+    if (value.length !== 10 || Number(value.slice(0, 4)) < 2000) {
+      setDateError('')
+      return
+    }
+    if (value < min) {
+      setDateError('Não é possível selecionar uma data que já passou. Escolha uma data futura.')
+      slotsRequestId.current += 1
+      setSlots([])
+      setSelectedSlot(null)
+      return
+    }
+    setDateError('')
     setDate(value)
+    if (dateInputRef.current) dateInputRef.current.value = value
     setSlots([])
     setSelectedSlot(null)
     slotsRequestId.current += 1
@@ -1548,7 +1566,8 @@ function AppointmentFlowPage() {
         <div className="card section-card">
           <button type="button" className="back-button" onClick={() => setStep(2)}>← Voltar para serviços</button>
           <h3>Escolha a data e o horário</h3>
-          <label>Data<input type="date" min={min} value={date} onChange={(event) => handleSelectDate(event.target.value)} /></label>
+          <label>Data<input ref={dateInputRef} type="date" min={min} defaultValue={date} onChange={(event) => handleSelectDate(event.target.value)} /></label>
+          {dateError ? <p className="field-error" role="alert">{dateError}</p> : null}
           {date && loading ? <LoadingState message="Carregando horários disponíveis" /> : null}
           {date && !loading && !error && slots.length === 0 ? <><p className="muted">Sem horários livres neste dia. Tente outro dia.</p><button type="button" className="button-secondary" onClick={() => { const next = new Date(`${date}T12:00:00`); next.setDate(next.getDate() + 1); handleSelectDate(formatLocalDate(next)) }}>Próximo dia</button></> : null}
           {slots.length > 0 ? <div className="slot-grid">{slots.map((slot) => <button type="button" key={`${slot.recurso?.id ?? selectedResource?.id ?? 'x'}-${slot.inicio}`} className="slot-item" onClick={() => handleSelectSlot(slot)}><span>{slot.recurso?.nome || selectedResource?.nome || 'Profissional'}</span><strong>{new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' }).format(new Date(slot.inicio))}</strong></button>)}</div> : null}
