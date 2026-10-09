@@ -1774,6 +1774,7 @@ function AppointmentDetailPage({ profile }) {
   const [error, setError] = useState('')
   const [actionMessage, setActionMessage] = useState('')
   const [cancelLoading, setCancelLoading] = useState(false)
+  const [showCancelModal, setShowCancelModal] = useState(false)
 
   const loadAppointment = async () => {
     try {
@@ -1799,9 +1800,9 @@ function AppointmentDetailPage({ profile }) {
   const canReview = hasPermission(permissions, 'api.avaliar_agendamento')
   const canCancel = ['solicitado', 'confirmado'].includes(appointment?.status)
   const handleCancel = async () => {
-    if (!window.confirm('Deseja cancelar esta sessão?')) return
     try {
       setCancelLoading(true)
+      setShowCancelModal(false)
       setActionMessage('')
       await apiRequest(`/agendamentos/${id}/cancelar/`, { method: 'POST' })
       setActionMessage('Sessão cancelada com sucesso.')
@@ -1836,11 +1837,24 @@ function AppointmentDetailPage({ profile }) {
         {appointment.observacoes ? <p><strong>Observações:</strong> {appointment.observacoes}</p> : null}
         <p><strong>Status:</strong> {formatStatus(appointment.status)}</p>
         <div className="meta-actions">
-          {canCancel ? <button type="button" className="button-secondary" onClick={handleCancel} disabled={cancelLoading}>{cancelLoading ? 'Cancelando...' : 'Cancelar'}</button> : null}
+          {canCancel ? <button type="button" className="button-secondary" onClick={() => setShowCancelModal(true)} disabled={cancelLoading}>{cancelLoading ? 'Cancelando...' : 'Cancelar'}</button> : null}
           {appointment.status === 'concluido' && !hasReview && canReview ? <Link to={`/sessao/${id}/avaliar`} className="button-primary">Avaliar</Link> : null}
         </div>
         {hasReview ? <div className="session-highlight"><strong>Avaliação: {appointment.nota ?? review?.nota}/5</strong><span>{appointment.comentario || review?.comentario || 'Sem comentário'}</span></div> : null}
       </div>
+      {showCancelModal ? (
+        <div className="confirmation-backdrop" onClick={() => setShowCancelModal(false)}>
+          <section className="confirmation-modal" role="alertdialog" aria-modal="true" aria-labelledby="cancel-session-title" aria-describedby="cancel-session-message" onClick={(event) => event.stopPropagation()}>
+            <div className="confirmation-icon" aria-hidden="true">!</div>
+            <h2 id="cancel-session-title">Cancelar sessão?</h2>
+            <p id="cancel-session-message">Tem certeza de que deseja cancelar esta sessão?</p>
+            <div className="confirmation-actions">
+              <button type="button" className="button-ghost" onClick={() => setShowCancelModal(false)}>Voltar</button>
+              <button type="button" className="button-danger" onClick={handleCancel} disabled={cancelLoading}>{cancelLoading ? 'Cancelando...' : 'Cancelar sessão'}</button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </section>
   )
 }
