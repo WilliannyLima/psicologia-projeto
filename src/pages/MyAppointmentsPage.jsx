@@ -1,0 +1,127 @@
+import { formatLocalDate, resolveRelatedName } from '../utils/appointments.js'
+import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { hasPermission, fetchAllPages, apiRequest } from '../services/api.js'
+import { formatDate, formatStatus } from '../utils/formatters.js'
+import { Alert } from '../components/ui/Alert.jsx'
+import { PageHeader } from '../components/layout/PageHeader.jsx'
+import { LoadingState } from '../components/ui/LoadingState.jsx'
+import { EmptyState } from '../components/ui/EmptyState.jsx'
+
+export function MyAppointmentsPage({ profile }) {
+  const [appointments, setAppointments] = useState([])
+  const [serviceOptions, setServiceOptions] = useState([])
+  const [resourceOptions, setResourceOptions] = useState([])
+  const [lookupError, setLookupError] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [tab, setTab] = useState('upcoming')
+  const [historyPage, setHistoryPage] = useState(1)
+  const [historyHasMore, setHistoryHasMore] = useState(false)
+  const appointmentsRequestId = useRef(0)
+  const appendRequestInProgress = useRef(false)
+
+  const loadAppointments = async (nextTab = tab, page = 1, append = false) => {
+    if (append && appendRequestInProgress.current) return
+    const requestId = ++appointmentsRequestId.current
+    if (append) appendRequestInProgress.current = true
+
+    try {
+      setLoading(true)
+      setError('')
+      const today = new Date()
+      const yesterday = new Date(today)
+      yesterday.setDate(yesterday.getDate() - 1)
+      const endpoint = nextTab === 'upcoming'
+        ? `/agendamentos/?data_inicio=${formatLocalDate(today)}`
+        : `/agendamentos/?data_fim=${formatLocalDate(yesterday)}&ordering=-inicio&page=${page}`
+      const response = await apiRequest(endpoint)
+      if (requestId !== appointmentsRequestId.current) return
+      const list = Array.isArray(response?.results) ? response.results : Array.isArray(response) ? response : null
+      if (!list || !list.every((item) => item && typeof item === 'object' && !Array.isArray(item))) {
+        throw new Error('A API retornou uma lista de sessões inválida.')
+      }
+      setAppointments((current) => {
+        if (!append) return list
+        const seenIds = new Set(current.map((item) => item.id))
+        return [...current, ...list.filter((item) => {
+          if (seenIds.has(item.id)) return false
+          seenIds.add(item.id)
+          return true
+        })]
+      })
+      setHistoryHasMore(Boolean(response?.next))
+      setHistoryPage(page)
+    } catch (err) {
+      if (requestId === appointmentsRequestId.current) setError(err.message)
+    } finally {
+      if (append) appendRequestInProgress.current = false
+      if (requestId === appointmentsRequestId.current) setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    setAppointments([])
+    loadAppointments(tab)
+  }, [tab])
+
+  useEffect(() => {
+    Promise.all([fetchAllPages('/servicos/'), fetchAllPages('/recursos/')])
+      .then(([serviceList, resourceList]) => {
+        setServiceOptions(serviceList)
+        setResourceOptions(resourceList)
+      })
+      .catch(() => setLookupError('NÃ£o foi possÃ­vel carregar os nomes dos serviÃ§os e profissionais.'))
+  }, [])
+
+  const visibleAppointments = tab === 'upcoming'
+    ? appointments.filter((item) => !['cancelado', 'concluido'].includes(item.status))
+    : appointments
+
+  return (
+    <section className="page-block">
+      <PageHeader
+        title="Minhas sessões"
+        subtitle="Acompanhe seus atendimentos e próximos passos."
+        backLabel="Voltar para o painel"
+        backTo="/dashboard"
+      />
+
+      <div className="meta-actions">
+        <button type="button" className={tab === 'upcoming' ? 'button-primary' : 'button-secondary'} onClick={() => setTab('upcoming')}>Próximos</button>
+        <button type="button" className={tab === 'history' ? 'button-primary' : 'button-secondary'} onClick={() => setTab('history')}>Histórico</button>
+      </div>
+      {loading ? <LoadingState message="Carregando sessões" /> : null}
+      {error ? <><Alert type="danger" message={error} /><button type="button" className="button-secondary" onClick={() => loadAppointments(tab, historyPage)}>Tentar de novo</button></> : null}
+
+      <div className="card section-card">
+        {lookupError ? <Alert type="info" message={lookupError} /> : null}
+        {!loading && !error && visibleAppointments.length > 0 ? (
+          <div className="list-stack">
+            {visibleAppointments.map((item) => (
+              (() => {
+                const serviceName = resolveRelatedName(item.servico, serviceOptions, item.servico_nome || item.nome_servico)
+                const resourceName = resolveRelatedName(item.recurso, resourceOptions, item.recurso_nome || item.psicologo_nome)
+                return (
+                  <Link className="list-item" key={item.id} to={`/sessao/${item.id}`}>
+                    <div><strong>{serviceName || resourceName || 'Sessão'}</strong><p>{resourceName ? `${resourceName} • ` : ''}{formatDate(item.inicio)}</p></div>
+                    <span className="badge">{formatStatus(item.status)}</span>
+                  </Link>
+                )
+              })()
+            ))}
+            {tab === 'history' && historyHasMore ? <button type="button" className="button-secondary" disabled={loading} onClick={() => loadAppointments('history', historyPage + 1, true)}>{loading ? 'Carregando...' : 'Carregar mais'}</button> : null}
+          </div>
+        ) : !loading && !error ? (
+          <EmptyState
+            title={tab === 'upcoming' ? 'Nenhuma sessão próxima' : 'Nenhuma sessão no histórico'}
+            description="Não há sessões para exibir."
+            action={hasPermission(profile?.permissoes, 'api.add_agendamento') ? <Link to="/agendar" className="button-primary">Agendar</Link> : null}
+          />
+        ) : null}
+      </div>
+    </section>
+  )
+}
+
+export default MyAppointmentsPage
