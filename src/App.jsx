@@ -84,6 +84,21 @@ function responseList(response) {
   return Array.isArray(response?.results) ? response.results : Array.isArray(response) ? response : []
 }
 
+function formatLocalDate(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function resolveRelatedName(value, options = [], explicitName) {
+  if (explicitName && typeof explicitName === 'string' && Number.isNaN(Number(explicitName))) return explicitName
+  if (value && typeof value === 'object') {
+    if (value.nome || value.name) return value.nome || value.name
+    value = value.id
+  }
+  if (typeof value === 'string' && Number.isNaN(Number(value))) return value
+  if (value === undefined || value === null) return null
+  return options.find((option) => Number(option.id) === Number(value))?.nome || null
+}
+
 async function fetchAllPages(path) {
   const items = []
   let nextPath = path
@@ -708,7 +723,7 @@ function App() {
               path="/sessao/:id"
               element={
                 <ProtectedRoute isAuthenticated={Boolean(tokens)}>
-                  <AppointmentDetailPage />
+                  <AppointmentDetailPage profile={profile} />
                 </ProtectedRoute>
               }
             />
@@ -1164,6 +1179,8 @@ function ResetPasswordPage() {
 function DashboardPage({ profile }) {
   const [organization, setOrganization] = useState(null)
   const [nextSession, setNextSession] = useState(null)
+  const [serviceOptions, setServiceOptions] = useState([])
+  const [resourceOptions, setResourceOptions] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -1194,6 +1211,18 @@ function DashboardPage({ profile }) {
   useEffect(() => {
     loadDashboard()
   }, [])
+
+  useEffect(() => {
+    Promise.all([fetchAllPages('/servicos/'), fetchAllPages('/recursos/')])
+      .then(([serviceList, resourceList]) => {
+        setServiceOptions(serviceList)
+        setResourceOptions(resourceList)
+      })
+      .catch(() => {})
+  }, [])
+
+  const nextServiceName = resolveRelatedName(nextSession?.servico, serviceOptions, nextSession?.servico_nome || nextSession?.nome_servico)
+  const nextResourceName = resolveRelatedName(nextSession?.recurso, resourceOptions, nextSession?.recurso_nome || nextSession?.psicologo_nome)
 
   return (
     <section className="page-block profile-page">
@@ -1226,8 +1255,8 @@ function DashboardPage({ profile }) {
             {nextSession ? (
               <div className="session-highlight">
                 <div>
-                  <strong>{nextSession.servico?.nome || nextSession.servico || 'Sessão'}</strong>
-                  <p>{nextSession.recurso?.nome || nextSession.recurso || 'Psicólogo'} • {formatDate(nextSession.inicio)}</p>
+                  <strong>{nextServiceName || nextResourceName || 'Sessão'}</strong>
+                  <p>{nextResourceName ? `${nextResourceName} • ` : ''}{formatDate(nextSession.inicio)}</p>
                 </div>
                 <div className="meta-actions">
                   <span className="badge">{formatStatus(nextSession.status)}</span>
@@ -1266,6 +1295,8 @@ function AppointmentFlowPage() {
   const [loaded, setLoaded] = useState(false)
   const slotsRequestId = useRef(0)
   const preselectedResource = location.state?.resource || null
+  const hoje = new Date()
+  const min = formatLocalDate(hoje)
 
   const listResponse = (response) =>
     Array.isArray(response?.results)
@@ -1382,6 +1413,7 @@ function AppointmentFlowPage() {
   const loadSlots = (selectedDate = date) => loadSlotsFor(selectedService, selectedResource, selectedDate)
 
   const handleSelectDate = (value) => {
+    if (value.length !== 10 || Number(value.slice(0, 4)) < 2000 || value < min) return
     setDate(value)
     setSlots([])
     setSelectedSlot(null)
@@ -1402,13 +1434,19 @@ function AppointmentFlowPage() {
       return
     }
 
+    const recursoId = selectedResource?.id || selectedSlot?.recurso?.id
+    if (!recursoId) {
+      setError('Selecione um horário com psicólogo disponível.')
+      return
+    }
+
     try {
       setLoading(true)
       setError('')
       setFieldErrors({})
       const payload = {
         servico: selectedService.id,
-        ...(selectedResource?.id ? { recurso: selectedResource.id } : {}),
+        recurso: recursoId,
         inicio: selectedSlot.inicio,
         observacoes,
       }
@@ -1421,7 +1459,13 @@ function AppointmentFlowPage() {
       setSubmittedAppointment(response)
       setStep(6)
     } catch (err) {
-      setError(err.message)
+      if (err.fields?.inicio) {
+        setStep(3)
+        await loadSlots()
+        setError(err.fields.inicio)
+      } else {
+        setError(err.message)
+      }
       setFieldErrors(err.fields || {})
     } finally {
       setLoading(false)
@@ -1444,7 +1488,7 @@ function AppointmentFlowPage() {
             <span className="badge">{appointment.status === 'solicitado' ? 'Solicitada' : formatStatus(appointment.status)}</span>
           </div>
           <p className="muted">
-            {selectedService?.duracao ? `${selectedService.duracao} min` : ''}
+            {selectedService?.duracao_min ? `${selectedService.duracao_min} min` : ''}
             {selectedService?.preco !== undefined ? ` • ${formatCurrency(selectedService.preco)}` : ''}
           </p>
           <div className="meta-actions">
@@ -1495,7 +1539,7 @@ function AppointmentFlowPage() {
           <h3>Escolha o serviço</h3>
           {availableServices.length === 0 ? <EmptyState title="Nenhum serviço disponível" description="Ainda não há serviços disponíveis para agendamento." /> : (
             <div className="service-grid">
-              {availableServices.map((service) => <button type="button" key={service.id} className="service-card" onClick={() => handleSelectService(service)}>{service.imagem || service.imagem_url ? <img src={service.imagem || service.imagem_url} alt="" /> : null}<strong>{service.nome}</strong>{service.descricao ? <span>{service.descricao}</span> : null}{service.duracao !== undefined ? <em>{service.duracao} min</em> : null}{service.preco !== undefined ? <b>{formatCurrency(service.preco)}</b> : null}</button>)}
+              {availableServices.map((service) => <button type="button" key={service.id} className="service-card" onClick={() => handleSelectService(service)}>{service.imagem || service.imagem_url ? <img src={service.imagem || service.imagem_url} alt="" /> : null}<strong>{service.nome}</strong>{service.descricao ? <span>{service.descricao}</span> : null}{service.duracao_min !== undefined ? <em>{service.duracao_min} min</em> : null}{service.preco !== undefined ? <b>{formatCurrency(service.preco)}</b> : null}</button>)}
             </div>
           )}
         </div>
@@ -1504,10 +1548,10 @@ function AppointmentFlowPage() {
         <div className="card section-card">
           <button type="button" className="back-button" onClick={() => setStep(2)}>← Voltar para serviços</button>
           <h3>Escolha a data e o horário</h3>
-          <label>Data<input type="date" value={date} onChange={(event) => handleSelectDate(event.target.value)} /></label>
+          <label>Data<input type="date" min={min} value={date} onChange={(event) => handleSelectDate(event.target.value)} /></label>
           {date && loading ? <LoadingState message="Carregando horários disponíveis" /> : null}
-          {date && !loading && !error && slots.length === 0 ? <p className="muted">Não há horários disponíveis para esta data.</p> : null}
-          {slots.length > 0 ? <div className="slot-grid">{slots.map((slot) => <button type="button" key={slot.inicio} className="slot-item" onClick={() => handleSelectSlot(slot)}><span>{slot.recurso?.nome || selectedResource?.nome || 'Profissional'}</span><strong>{new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' }).format(new Date(slot.inicio))}</strong></button>)}</div> : null}
+          {date && !loading && !error && slots.length === 0 ? <><p className="muted">Sem horários livres neste dia. Tente outro dia.</p><button type="button" className="button-secondary" onClick={() => { const next = new Date(`${date}T12:00:00`); next.setDate(next.getDate() + 1); handleSelectDate(formatLocalDate(next)) }}>Próximo dia</button></> : null}
+          {slots.length > 0 ? <div className="slot-grid">{slots.map((slot) => <button type="button" key={`${slot.recurso?.id ?? selectedResource?.id ?? 'x'}-${slot.inicio}`} className="slot-item" onClick={() => handleSelectSlot(slot)}><span>{slot.recurso?.nome || selectedResource?.nome || 'Profissional'}</span><strong>{new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' }).format(new Date(slot.inicio))}</strong></button>)}</div> : null}
         </div>
       ) : null}
 
@@ -1519,7 +1563,7 @@ function AppointmentFlowPage() {
           <p><strong>Serviço:</strong> {selectedService?.nome}</p>
           <p><strong>Data:</strong> {date ? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeZone: 'UTC' }).format(new Date(`${date}T00:00:00Z`)) : 'Data não informada'}</p>
           <p><strong>Horário:</strong> {selectedSlot?.horario || (selectedSlot?.inicio ? new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' }).format(new Date(selectedSlot.inicio)) : 'Horário não informado')}</p>
-          {selectedService?.duracao !== undefined ? <p><strong>Duração:</strong> {selectedService.duracao} min</p> : null}
+          {selectedService?.duracao_min !== undefined ? <p><strong>Duração:</strong> {selectedService.duracao_min} min</p> : null}
           {selectedService?.preco !== undefined ? <p><strong>Preço:</strong> {formatCurrency(selectedService.preco)}</p> : null}
           <label>Observações<textarea value={observacoes} onChange={(event) => setObservacoes(event.target.value)} /></label>
           <p className="muted">Evite informar dados pessoais ou informações sensíveis desnecessárias.</p>
@@ -1533,6 +1577,8 @@ function AppointmentFlowPage() {
 
 function MyAppointmentsPage() {
   const [appointments, setAppointments] = useState([])
+  const [serviceOptions, setServiceOptions] = useState([])
+  const [resourceOptions, setResourceOptions] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [tab, setTab] = useState('upcoming')
@@ -1544,9 +1590,11 @@ function MyAppointmentsPage() {
       setLoading(true)
       setError('')
       const today = new Date()
+      const yesterday = new Date(today)
+      yesterday.setDate(yesterday.getDate() - 1)
       const endpoint = nextTab === 'upcoming'
-        ? `/agendamentos/?data_inicio=${today.toISOString().slice(0, 10)}`
-        : `/agendamentos/?data_fim=${new Date(today.setDate(today.getDate() - 1)).toISOString().slice(0, 10)}&ordering=-inicio&page=${page}`
+        ? `/agendamentos/?data_inicio=${formatLocalDate(today)}`
+        : `/agendamentos/?data_fim=${formatLocalDate(yesterday)}&ordering=-inicio&page=${page}`
       const response = await apiRequest(endpoint)
       const list = Array.isArray(response?.results) ? response.results : Array.isArray(response) ? response : []
       setAppointments((current) => append ? [...current, ...list] : list)
@@ -1563,6 +1611,15 @@ function MyAppointmentsPage() {
     setAppointments([])
     loadAppointments(tab)
   }, [tab])
+
+  useEffect(() => {
+    Promise.all([fetchAllPages('/servicos/'), fetchAllPages('/recursos/')])
+      .then(([serviceList, resourceList]) => {
+        setServiceOptions(serviceList)
+        setResourceOptions(resourceList)
+      })
+      .catch(() => {})
+  }, [])
 
   const visibleAppointments = tab === 'upcoming'
     ? appointments.filter((item) => !['cancelado', 'concluido'].includes(item.status))
@@ -1588,10 +1645,16 @@ function MyAppointmentsPage() {
         {!loading && !error && visibleAppointments.length > 0 ? (
           <div className="list-stack">
             {visibleAppointments.map((item) => (
-              <Link className="list-item" key={item.id} to={`/sessao/${item.id}`}>
-                <div><strong>{item.servico?.nome || item.servico || 'Sessão'}</strong><p>{item.recurso?.nome || item.recurso || 'Psicólogo'} • {formatDate(item.inicio)}</p></div>
-                <span className="badge">{formatStatus(item.status)}</span>
-              </Link>
+              (() => {
+                const serviceName = resolveRelatedName(item.servico, serviceOptions, item.servico_nome || item.nome_servico)
+                const resourceName = resolveRelatedName(item.recurso, resourceOptions, item.recurso_nome || item.psicologo_nome)
+                return (
+                  <Link className="list-item" key={item.id} to={`/sessao/${item.id}`}>
+                    <div><strong>{serviceName || resourceName || 'Sessão'}</strong><p>{resourceName ? `${resourceName} • ` : ''}{formatDate(item.inicio)}</p></div>
+                    <span className="badge">{formatStatus(item.status)}</span>
+                  </Link>
+                )
+              })()
             ))}
             {tab === 'history' && historyHasMore ? <button type="button" className="button-secondary" onClick={() => loadAppointments('history', historyPage + 1, true)}>Carregar mais</button> : null}
           </div>
@@ -1682,10 +1745,12 @@ function PsychologistsPage() {
   )
 }
 
-function AppointmentDetailPage() {
+function AppointmentDetailPage({ profile }) {
   const { id } = useParams()
   const location = useLocation()
   const [appointment, setAppointment] = useState(null)
+  const [serviceOptions, setServiceOptions] = useState([])
+  const [resourceOptions, setResourceOptions] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [actionMessage, setActionMessage] = useState('')
@@ -1696,6 +1761,12 @@ function AppointmentDetailPage() {
       setLoading(true)
       setError('')
       setAppointment(await apiRequest(`/agendamentos/${id}/`))
+      const [serviceResult, resourceResult] = await Promise.allSettled([
+        fetchAllPages('/servicos/'),
+        fetchAllPages('/recursos/'),
+      ])
+      setServiceOptions(serviceResult.status === 'fulfilled' ? serviceResult.value : [])
+      setResourceOptions(resourceResult.status === 'fulfilled' ? resourceResult.value : [])
     } catch (err) {
       setError(err.message)
     } finally {
@@ -1708,7 +1779,6 @@ function AppointmentDetailPage() {
   const permissions = readStoredJSON(STORAGE_KEYS.profile)?.permissoes
   const canReview = hasPermission(permissions, 'api.avaliar_agendamento')
   const canCancel = ['solicitado', 'confirmado'].includes(appointment?.status)
-
   const handleCancel = async () => {
     if (!window.confirm('Deseja cancelar esta sessão?')) return
     try {
@@ -1729,17 +1799,20 @@ function AppointmentDetailPage() {
 
   const review = appointment.avaliacao || appointment.avaliacoes?.[0]
   const hasReview = appointment.nota !== undefined && appointment.nota !== null || Boolean(review)
+  const serviceName = resolveRelatedName(appointment.servico, serviceOptions, appointment.servico_nome || appointment.nome_servico)
+  const resourceName = resolveRelatedName(appointment.recurso, resourceOptions, appointment.recurso_nome || appointment.psicologo_nome)
+  const clientName = appointment.cliente?.nome || appointment.cliente_nome || appointment.nome_cliente || profile?.nome || profile?.username
   return (
     <section className="page-block">
       <PageHeader title="Detalhe da sessão" subtitle="Confira os dados do seu agendamento." backLabel="Voltar para sessões" backTo="/minhas-sessoes" />
       {location.state?.message ? <Alert type="success" message={location.state.message} /> : null}
       {actionMessage ? <Alert type={actionMessage.includes('sucesso') ? 'success' : 'danger'} message={actionMessage} /> : null}
       <div className="card section-card">
-        <h3>{appointment.servico?.nome || appointment.servico || 'Sessão'}</h3>
-        <p><strong>Psicólogo:</strong> {appointment.recurso?.nome || appointment.recurso || 'Não informado'}</p>
-        <p><strong>Cliente:</strong> {appointment.cliente?.nome || appointment.cliente || 'Não informado'}</p>
+        <h3>{serviceName || resourceName || 'Sessão'}</h3>
+        <p><strong>Psicólogo:</strong> {resourceName || 'Não informado'}</p>
+        <p><strong>Cliente:</strong> {clientName || 'Não informado'}</p>
         <p><strong>Data e horário:</strong> {formatDate(appointment.inicio)}</p>
-        {appointment.duracao !== undefined ? <p><strong>Duração:</strong> {appointment.duracao} min</p> : null}
+        {(appointment.duracao_min ?? appointment.duracao) !== undefined ? <p><strong>Duração:</strong> {appointment.duracao_min ?? appointment.duracao} min</p> : null}
         {appointment.preco !== undefined ? <p><strong>Preço:</strong> {formatCurrency(appointment.preco)}</p> : null}
         {appointment.observacoes ? <p><strong>Observações:</strong> {appointment.observacoes}</p> : null}
         <p><strong>Status:</strong> {formatStatus(appointment.status)}</p>
@@ -2142,7 +2215,7 @@ function AdminDashboardPage() {
 }
 
 function AdminAgendaPage() {
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [date, setDate] = useState(() => formatLocalDate(new Date()))
   const [resourceId, setResourceId] = useState('')
   const [resources, setResources] = useState([])
   const [agenda, setAgenda] = useState([])
@@ -2179,7 +2252,7 @@ function AdminAppointmentDetailPage({ permissions }) {
   const action = async (endpoint) => { if (endpoint === 'cancelar' && !window.confirm('Cancelar este agendamento?')) return; try { setActionId(endpoint); setError(''); await apiRequest(`/agendamentos/${id}/${endpoint}/`, { method: 'POST' }); await load() } catch (err) { setError(err.message) } finally { setActionId('') } }
   if (loading) return <section className="page-block"><BackButton label="Voltar para agenda" to="/admin/agenda" /><LoadingState message="Carregando sessão" /></section>
   if (error) return <section className="page-block"><BackButton label="Voltar para agenda" to="/admin/agenda" /><Alert type="danger" message={error} /><button type="button" className="button-secondary" onClick={load}>Tentar de novo</button></section>
-  return <section className="page-block"><PageHeader title="Detalhe da sessão" subtitle="Gerencie o agendamento conforme suas permissões." backLabel="Voltar para agenda" backTo="/admin/agenda" /><div className="card section-card"><p><strong>Paciente:</strong> {item.cliente?.nome || item.cliente || 'Não informado'}</p><p><strong>Serviço:</strong> {item.servico?.nome || item.servico || 'Não informado'}</p><p><strong>Psicólogo:</strong> {item.recurso?.nome || item.recurso || 'Não informado'}</p><p><strong>Data:</strong> {formatDate(item.inicio)}</p>{item.duracao !== undefined ? <p><strong>Duração:</strong> {item.duracao} min</p> : null}{item.preco !== undefined ? <p><strong>Preço:</strong> {formatCurrency(item.preco)}</p> : null}<p><strong>Observações:</strong> {item.observacoes || 'Nenhuma'}</p>{item.nota !== undefined && item.nota !== null ? <p><strong>Avaliação:</strong> {item.nota}/5</p> : null}{item.comentario ? <p><strong>Comentário:</strong> {item.comentario}</p> : null}<p><strong>Status:</strong> {formatStatus(item.status)}</p><div className="meta-actions">{item.status === 'solicitado' && hasPermission(permissions, 'api.confirmar_agendamento') ? <button className="button-primary" disabled={actionId === 'confirmar'} onClick={() => action('confirmar')}>Confirmar</button> : null}{item.status === 'confirmado' && hasPermission(permissions, 'api.concluir_agendamento') ? <button className="button-primary" disabled={actionId === 'concluir'} onClick={() => action('concluir')}>Concluir</button> : null}{['solicitado', 'confirmado'].includes(item.status) && hasPermission(permissions, 'api.cancelar_agendamento') ? <button className="button-secondary" disabled={actionId === 'cancelar'} onClick={() => action('cancelar')}>Cancelar</button> : null}</div></div></section>
+  return <section className="page-block"><PageHeader title="Detalhe da sessão" subtitle="Gerencie o agendamento conforme suas permissões." backLabel="Voltar para agenda" backTo="/admin/agenda" /><div className="card section-card"><p><strong>Paciente:</strong> {item.cliente?.nome || item.cliente || 'Não informado'}</p><p><strong>Serviço:</strong> {item.servico?.nome || item.servico || 'Não informado'}</p><p><strong>Psicólogo:</strong> {item.recurso?.nome || item.recurso || 'Não informado'}</p><p><strong>Data:</strong> {formatDate(item.inicio)}</p>{(item.duracao_min ?? item.duracao) !== undefined ? <p><strong>Duração:</strong> {item.duracao_min ?? item.duracao} min</p> : null}{item.preco !== undefined ? <p><strong>Preço:</strong> {formatCurrency(item.preco)}</p> : null}<p><strong>Observações:</strong> {item.observacoes || 'Nenhuma'}</p>{item.nota !== undefined && item.nota !== null ? <p><strong>Avaliação:</strong> {item.nota}/5</p> : null}{item.comentario ? <p><strong>Comentário:</strong> {item.comentario}</p> : null}<p><strong>Status:</strong> {formatStatus(item.status)}</p><div className="meta-actions">{item.status === 'solicitado' && hasPermission(permissions, 'api.confirmar_agendamento') ? <button className="button-primary" disabled={actionId === 'confirmar'} onClick={() => action('confirmar')}>Confirmar</button> : null}{item.status === 'confirmado' && hasPermission(permissions, 'api.concluir_agendamento') ? <button className="button-primary" disabled={actionId === 'concluir'} onClick={() => action('concluir')}>Concluir</button> : null}{['solicitado', 'confirmado'].includes(item.status) && hasPermission(permissions, 'api.cancelar_agendamento') ? <button className="button-secondary" disabled={actionId === 'cancelar'} onClick={() => action('cancelar')}>Cancelar</button> : null}</div></div></section>
 }
 
 function AdminBusinessPage({ permissions }) {
