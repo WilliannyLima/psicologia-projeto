@@ -87,7 +87,7 @@ function responseList(response) {
   return Array.isArray(response?.results) ? response.results : Array.isArray(response) ? response : []
 }
 
-async function fetchAllPages(path) {
+async function fetchAllPages(path, { strict = false } = {}) {
   const items = []
   let nextPath = path
   const apiBase = new URL(`${API_BASE_URL.replace(/\/+$/, '')}/`)
@@ -95,6 +95,9 @@ async function fetchAllPages(path) {
 
   while (nextPath) {
     const response = await apiRequest(nextPath)
+    if (strict && !Array.isArray(response) && !Array.isArray(response?.results)) {
+      throw new Error('A API retornou uma resposta de lista inválida.')
+    }
     items.push(...responseList(response))
     if (!response?.next) break
     const nextUrl = new URL(response.next, apiBase)
@@ -337,6 +340,14 @@ function getProfilePhoto(profile) {
   return profile?.foto || profile?.foto_url || profile?.avatar || profile?.avatar_url || ''
 }
 
+function requireProfileResponse(response) {
+  if (!response || typeof response !== 'object' || Array.isArray(response) || typeof response.nome !== 'string' || !response.nome.trim()) {
+    throw new Error('A API retornou dados de perfil inválidos.')
+  }
+
+  return response
+}
+
 function formatDisplayName(name) {
   if (!name) return 'seja bem-vindo(a)'
   return name
@@ -365,11 +376,12 @@ function ProfileAvatar({ profile, size = 'default', className = '' }) {
   )
 }
 
-function ProfilePhotoUpload({ profile, onProfileChange }) {
+function ProfilePhotoUpload({ profile, onProfileChange, onLoadingChange, disabled = false }) {
   const [selectedFile, setSelectedFile] = useState(null)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [loading, setLoading] = useState(false)
+  const requestInProgressRef = useRef(false)
   const preview = useMemo(
     () => (selectedFile ? URL.createObjectURL(selectedFile) : ''),
     [selectedFile],
@@ -412,14 +424,17 @@ function ProfilePhotoUpload({ profile, onProfileChange }) {
   }
 
   const handleUpload = async () => {
-    if (!selectedFile) return
+    if (!selectedFile || disabled || requestInProgressRef.current) return
+    requestInProgressRef.current = true
 
     try {
       setLoading(true)
+      onLoadingChange?.(true)
       setError('')
+      setSuccess('')
       const body = new FormData()
       body.append('foto', selectedFile)
-      const response = await apiRequest('/auth/eu/', { method: 'PATCH', body })
+      const response = requireProfileResponse(await apiRequest('/auth/eu/', { method: 'PATCH', body }))
       onProfileChange(response)
       setSelectedFile(null)
       setSuccess('Foto de perfil atualizada com sucesso.')
@@ -430,23 +445,31 @@ function ProfilePhotoUpload({ profile, onProfileChange }) {
           : err.message || 'Não foi possível atualizar sua foto.',
       )
     } finally {
+      requestInProgressRef.current = false
       setLoading(false)
+      onLoadingChange?.(false)
     }
   }
 
   const handleRemove = async () => {
+    if (disabled || loading || requestInProgressRef.current) return
+    requestInProgressRef.current = true
     try {
       setLoading(true)
+      onLoadingChange?.(true)
       setError('')
+      setSuccess('')
       const body = new FormData()
       body.append('foto', '')
-      const response = await apiRequest('/auth/eu/', { method: 'PATCH', body })
+      const response = requireProfileResponse(await apiRequest('/auth/eu/', { method: 'PATCH', body }))
       onProfileChange(response)
       setSuccess('Foto de perfil removida com sucesso.')
     } catch (err) {
       setError(err.status === 400 ? 'Não foi possível remover a foto.' : err.message)
     } finally {
+      requestInProgressRef.current = false
       setLoading(false)
+      onLoadingChange?.(false)
     }
   }
 
@@ -456,7 +479,7 @@ function ProfilePhotoUpload({ profile, onProfileChange }) {
     <div className="profile-photo-section">
       <div className="profile-photo-preview">
         <ProfileAvatar profile={currentProfile} size="profile" />
-        <label className="profile-photo-overlay" htmlFor="profile-photo-input">
+        <label className="profile-photo-overlay" htmlFor="profile-photo-input" aria-disabled={disabled || loading}>
           <span aria-hidden="true">📷</span>
           <span>{selectedFile ? 'Trocar imagem' : 'Alterar foto'}</span>
         </label>
@@ -466,11 +489,11 @@ function ProfilePhotoUpload({ profile, onProfileChange }) {
         <h2>{selectedFile ? 'Pré-visualização' : 'Personalize seu perfil'}</h2>
         <p>Escolha uma foto para personalizar seu perfil. JPG, PNG ou WEBP, até 5 MB.</p>
         <div className="profile-photo-actions">
-          <label className="button-secondary" htmlFor="profile-photo-input">
+          <label className="button-secondary" htmlFor="profile-photo-input" aria-disabled={disabled || loading}>
             {getProfilePhoto(profile) ? 'Alterar foto' : 'Adicionar foto'}
           </label>
           {getProfilePhoto(profile) ? (
-            <button type="button" className="button-ghost" onClick={handleRemove} disabled={loading}>
+            <button type="button" className="button-ghost" onClick={handleRemove} disabled={disabled || loading}>
               Remover foto
             </button>
           ) : null}
@@ -480,14 +503,15 @@ function ProfilePhotoUpload({ profile, onProfileChange }) {
             type="file"
             accept="image/jpeg,image/png,image/webp"
             aria-label="Selecionar foto de perfil"
+            disabled={disabled || loading}
             onChange={handleFileChange}
           />
           {selectedFile ? (
             <>
-              <button type="button" className="button-primary" onClick={handleUpload} disabled={loading}>
+              <button type="button" className="button-primary" onClick={handleUpload} disabled={disabled || loading}>
                 {loading ? 'Salvando...' : 'Confirmar foto'}
               </button>
-              <button type="button" className="button-ghost" onClick={cancelSelection} disabled={loading}>
+              <button type="button" className="button-ghost" onClick={cancelSelection} disabled={disabled || loading}>
                 Cancelar
               </button>
             </>
@@ -1190,28 +1214,54 @@ function DashboardPage({ profile }) {
   const [lookupError, setLookupError] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const dashboardRequestIdRef = useRef(0)
+  const dashboardRequestInProgressRef = useRef(false)
+  const lookupRequestIdRef = useRef(0)
 
   const loadDashboard = async () => {
+    if (dashboardRequestInProgressRef.current) return
+    dashboardRequestInProgressRef.current = true
+    const requestId = ++dashboardRequestIdRef.current
+
     try {
       setLoading(true)
       setError('')
+      setServiceOptions([])
+      setResourceOptions([])
+      setLookupError('')
       const today = formatLocalDate(new Date())
       const [org, agenda] = await Promise.all([
         apiRequest('/organizacao/'),
-        fetchAllPages(`/agendamentos/?data_inicio=${today}`),
+        fetchAllPages(`/agendamentos/?data_inicio=${today}`, { strict: true }),
       ])
+      if (requestId !== dashboardRequestIdRef.current) return
+      if (!org || typeof org !== 'object' || Array.isArray(org)) {
+        throw new Error('A API retornou dados da organização inválidos.')
+      }
+      if (!agenda.every((appointment) => (
+        appointment &&
+        typeof appointment === 'object' &&
+        !Array.isArray(appointment) &&
+        appointment.id !== undefined &&
+        appointment.id !== null &&
+        typeof appointment.inicio === 'string' &&
+        !Number.isNaN(Date.parse(appointment.inicio))
+      ))) {
+        throw new Error('A API retornou dados de sessões inválidos.')
+      }
 
-      const appointments = agenda
-      const upcoming = appointments
-        .filter((appointment) => !['cancelado', 'concluido'].includes(appointment.status))
-        .filter((appointment) => !appointment.inicio || new Date(appointment.inicio) >= new Date())
+      const now = new Date()
+      const upcoming = agenda
+        .filter((appointment) => ['solicitado', 'confirmado'].includes(appointment.status))
+        .filter((appointment) => new Date(appointment.inicio) >= now)
         .sort((first, second) => new Date(first.inicio) - new Date(second.inicio))[0] || null
       setOrganization(org)
       setNextSession(upcoming)
     } catch (err) {
-      setError(err.message)
+      if (requestId === dashboardRequestIdRef.current) setError(err.message)
     } finally {
-      setLoading(false)
+      dashboardRequestInProgressRef.current = false
+      if (requestId === dashboardRequestIdRef.current) setLoading(false)
     }
   }
 
@@ -1220,13 +1270,35 @@ function DashboardPage({ profile }) {
   }, [])
 
   useEffect(() => {
-    Promise.all([fetchAllPages('/servicos/'), fetchAllPages('/recursos/')])
-      .then(([serviceList, resourceList]) => {
-        setServiceOptions(serviceList)
-        setResourceOptions(resourceList)
+    const lookupRequestId = ++lookupRequestIdRef.current
+    if (!nextSession) return
+    const serviceName = resolveRelatedName(
+      nextSession.servico,
+      [],
+      nextSession.servico_nome || nextSession.nome_servico,
+    )
+    const resourceName = resolveRelatedName(
+      nextSession.recurso,
+      [],
+      nextSession.recurso_nome || nextSession.psicologo_nome,
+    )
+    if (serviceName && resourceName) return
+    Promise.allSettled([
+      serviceName ? Promise.resolve([]) : fetchAllPages('/servicos/'),
+      resourceName ? Promise.resolve([]) : fetchAllPages('/recursos/'),
+    ])
+      .then(([serviceResult, resourceResult]) => {
+        if (lookupRequestId !== lookupRequestIdRef.current) return
+        setServiceOptions(serviceResult.status === 'fulfilled' ? serviceResult.value : [])
+        setResourceOptions(resourceResult.status === 'fulfilled' ? resourceResult.value : [])
+        if (serviceResult.status === 'rejected' || resourceResult.status === 'rejected') {
+          setLookupError('Falha ao carregar nomes de servicos e profissionais.')
+        } else {
+          setLookupError('')
+        }
       })
       .catch(() => setLookupError('NÃ£o foi possÃ­vel carregar os nomes dos serviÃ§os e profissionais.'))
-  }, [])
+  }, [nextSession])
 
   const nextServiceName = resolveRelatedName(nextSession?.servico, serviceOptions, nextSession?.servico_nome || nextSession?.nome_servico)
   const nextResourceName = resolveRelatedName(nextSession?.recurso, resourceOptions, nextSession?.recurso_nome || nextSession?.psicologo_nome)
@@ -1252,7 +1324,7 @@ function DashboardPage({ profile }) {
           <div className="stats-grid">
             <StatCard label="Negócio" value={organization?.nome || 'Não informado'} accent="primary" />
             <StatCard label="Próxima sessão" value={nextSession ? formatDate(nextSession.inicio) : 'Sem agendamento'} accent="secondary" />
-            <StatCard label="Status" value={nextSession?.status ? formatStatus(nextSession.status) : 'Disponível'} accent="tertiary" />
+            <StatCard label="Status" value={nextSession?.status ? formatStatus(nextSession.status) : '—'} accent="tertiary" />
           </div>
 
           <div className="card section-card">
@@ -1302,6 +1374,7 @@ function AppointmentFlowPage() {
   const [error, setError] = useState('')
   const [loaded, setLoaded] = useState(false)
   const slotsRequestId = useRef(0)
+  const submittingRef = useRef(false)
   const dateInputRef = useRef(null)
   const preselectedResource = location.state?.resource || null
   const [min] = useState(() => formatLocalDate(new Date()))
@@ -1351,6 +1424,7 @@ function AppointmentFlowPage() {
 
   const handleSelectResource = async (resource) => {
     slotsRequestId.current += 1
+    setLoading(false)
     setSelectedResource(resource)
     setDate('')
     setDateError('')
@@ -1381,6 +1455,9 @@ function AppointmentFlowPage() {
   }, [])
 
   const handleSelectService = async (service) => {
+    slotsRequestId.current += 1
+    setLoading(false)
+    setError('')
     setSelectedService(service)
     setDate('')
     setDateError('')
@@ -1396,7 +1473,6 @@ function AppointmentFlowPage() {
     setStep(2)
     try {
       setLoading(true)
-      setError('')
       setResources(await fetchAllPages(`/recursos/?servicos=${service.id}`))
       setLoaded(true)
     } catch (err) {
@@ -1431,15 +1507,36 @@ function AppointmentFlowPage() {
   const loadSlots = (selectedDate = date) => loadSlotsFor(selectedService, selectedResource, selectedDate)
 
   const handleSelectDate = (value) => {
-    if (value.length !== 10 || Number(value.slice(0, 4)) < 2000) {
+    if (!value) {
+      slotsRequestId.current += 1
+      setDate('')
       setDateError('')
+      setSlots([])
+      setSelectedSlot(null)
+      setError('')
+      setLoading(false)
+      return
+    }
+
+    if (value.length !== 10 || Number(value.slice(0, 4)) < 2000) {
+      slotsRequestId.current += 1
+      setDate('')
+      if (dateInputRef.current) dateInputRef.current.value = ''
+      setDateError('Selecione uma data válida.')
+      setSlots([])
+      setSelectedSlot(null)
+      setLoading(false)
       return
     }
     if (!isSelectableDate(value, min)) {
       setDateError('Não é possível selecionar uma data que já passou. Escolha uma data futura.')
       slotsRequestId.current += 1
+      setDate('')
+      if (dateInputRef.current) dateInputRef.current.value = ''
       setSlots([])
       setSelectedSlot(null)
+      setError('')
+      setLoading(false)
       return
     }
     setDateError('')
@@ -1459,6 +1556,7 @@ function AppointmentFlowPage() {
   }
 
   const handleConfirm = async () => {
+    if (submittingRef.current) return
     if (!selectedService || !selectedSlot?.inicio) {
       setError('Selecione um serviço e um horário disponível.')
       return
@@ -1471,6 +1569,7 @@ function AppointmentFlowPage() {
     }
 
     try {
+      submittingRef.current = true
       setLoading(true)
       setError('')
       setFieldErrors({})
@@ -1493,6 +1592,7 @@ function AppointmentFlowPage() {
       }
       setFieldErrors(err.fields || {})
     } finally {
+      submittingRef.current = false
       setLoading(false)
     }
   }
@@ -1613,8 +1713,14 @@ function MyAppointmentsPage({ profile }) {
   const [tab, setTab] = useState('upcoming')
   const [historyPage, setHistoryPage] = useState(1)
   const [historyHasMore, setHistoryHasMore] = useState(false)
+  const appointmentsRequestId = useRef(0)
+  const appendRequestInProgress = useRef(false)
 
   const loadAppointments = async (nextTab = tab, page = 1, append = false) => {
+    if (append && appendRequestInProgress.current) return
+    const requestId = ++appointmentsRequestId.current
+    if (append) appendRequestInProgress.current = true
+
     try {
       setLoading(true)
       setError('')
@@ -1625,14 +1731,27 @@ function MyAppointmentsPage({ profile }) {
         ? `/agendamentos/?data_inicio=${formatLocalDate(today)}`
         : `/agendamentos/?data_fim=${formatLocalDate(yesterday)}&ordering=-inicio&page=${page}`
       const response = await apiRequest(endpoint)
-      const list = Array.isArray(response?.results) ? response.results : Array.isArray(response) ? response : []
-      setAppointments((current) => append ? [...current, ...list] : list)
+      if (requestId !== appointmentsRequestId.current) return
+      const list = Array.isArray(response?.results) ? response.results : Array.isArray(response) ? response : null
+      if (!list || !list.every((item) => item && typeof item === 'object' && !Array.isArray(item))) {
+        throw new Error('A API retornou uma lista de sessões inválida.')
+      }
+      setAppointments((current) => {
+        if (!append) return list
+        const seenIds = new Set(current.map((item) => item.id))
+        return [...current, ...list.filter((item) => {
+          if (seenIds.has(item.id)) return false
+          seenIds.add(item.id)
+          return true
+        })]
+      })
       setHistoryHasMore(Boolean(response?.next))
       setHistoryPage(page)
     } catch (err) {
-      setError(err.message)
+      if (requestId === appointmentsRequestId.current) setError(err.message)
     } finally {
-      setLoading(false)
+      if (append) appendRequestInProgress.current = false
+      if (requestId === appointmentsRequestId.current) setLoading(false)
     }
   }
 
@@ -1686,7 +1805,7 @@ function MyAppointmentsPage({ profile }) {
                 )
               })()
             ))}
-            {tab === 'history' && historyHasMore ? <button type="button" className="button-secondary" onClick={() => loadAppointments('history', historyPage + 1, true)}>Carregar mais</button> : null}
+            {tab === 'history' && historyHasMore ? <button type="button" className="button-secondary" disabled={loading} onClick={() => loadAppointments('history', historyPage + 1, true)}>{loading ? 'Carregando...' : 'Carregar mais'}</button> : null}
           </div>
         ) : !loading && !error ? (
           <EmptyState
@@ -1704,17 +1823,35 @@ function PsychologistsPage() {
   const [psychologists, setPsychologists] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const requestIdRef = useRef(0)
+  const requestInProgressRef = useRef(false)
 
   const loadPsychologists = async () => {
-      try {
-        setLoading(true)
-        setError('')
-        setPsychologists(await fetchAllPages('/recursos/'))
-      } catch (err) {
-        setError(err.message)
-      } finally {
-        setLoading(false)
+    if (requestInProgressRef.current) return
+    requestInProgressRef.current = true
+    const requestId = ++requestIdRef.current
+
+    try {
+      setLoading(true)
+      setError('')
+      const professionals = await fetchAllPages('/recursos/', { strict: true })
+      if (requestId !== requestIdRef.current) return
+      if (!professionals.every((professional) => (
+        professional &&
+        typeof professional === 'object' &&
+        !Array.isArray(professional) &&
+        professional.id !== undefined &&
+        professional.id !== null
+      ))) {
+        throw new Error('A API retornou dados de profissionais inválidos.')
       }
+      setPsychologists(professionals)
+    } catch (err) {
+      if (requestId === requestIdRef.current) setError(err.message)
+    } finally {
+      if (requestId === requestIdRef.current) setLoading(false)
+      requestInProgressRef.current = false
+    }
   }
 
   useEffect(() => {
@@ -1785,16 +1922,25 @@ function AppointmentDetailPage({ profile }) {
   const [actionMessage, setActionMessage] = useState('')
   const [cancelLoading, setCancelLoading] = useState(false)
   const [showCancelModal, setShowCancelModal] = useState(false)
+  const appointmentRequestId = useRef(0)
+  const cancelRequestInProgress = useRef(false)
 
   const loadAppointment = async () => {
+    const requestId = ++appointmentRequestId.current
     try {
       setLoading(true)
       setError('')
-      setAppointment(await apiRequest(`/agendamentos/${id}/`))
+      const appointmentResponse = await apiRequest(`/agendamentos/${id}/`)
+      if (requestId !== appointmentRequestId.current) return
+      if (!appointmentResponse || typeof appointmentResponse !== 'object' || Array.isArray(appointmentResponse)) {
+        throw new Error('A API retornou dados de sessão inválidos.')
+      }
+      setAppointment(appointmentResponse)
       const [serviceResult, resourceResult] = await Promise.allSettled([
         fetchAllPages('/servicos/'),
         fetchAllPages('/recursos/'),
       ])
+      if (requestId !== appointmentRequestId.current) return
       setServiceOptions(serviceResult.status === 'fulfilled' ? serviceResult.value : [])
       setResourceOptions(resourceResult.status === 'fulfilled' ? resourceResult.value : [])
       if (serviceResult.status === 'rejected' || resourceResult.status === 'rejected') {
@@ -1803,9 +1949,9 @@ function AppointmentDetailPage({ profile }) {
         setLookupError('')
       }
     } catch (err) {
-      setError(err.message)
+      if (requestId === appointmentRequestId.current) setError(err.message)
     } finally {
-      setLoading(false)
+      if (requestId === appointmentRequestId.current) setLoading(false)
     }
   }
 
@@ -1815,6 +1961,8 @@ function AppointmentDetailPage({ profile }) {
   const canReview = hasPermission(permissions, 'api.avaliar_agendamento')
   const canCancel = hasPermission(permissions, 'api.cancelar_agendamento') && ['solicitado', 'confirmado'].includes(appointment?.status)
   const handleCancel = async () => {
+    if (cancelRequestInProgress.current) return
+    cancelRequestInProgress.current = true
     try {
       setCancelLoading(true)
       setShowCancelModal(false)
@@ -1825,6 +1973,7 @@ function AppointmentDetailPage({ profile }) {
     } catch (err) {
       setActionMessage(err.message)
     } finally {
+      cancelRequestInProgress.current = false
       setCancelLoading(false)
     }
   }
@@ -2062,21 +2211,30 @@ function ProfilePage({ profile, onLogout, onProfileChange }) {
   const [profileLoading, setProfileLoading] = useState(true)
   const [loadFailed, setLoadFailed] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [photoSaving, setPhotoSaving] = useState(false)
+  const [success, setSuccess] = useState('')
   const [error, setError] = useState('')
   const [fieldErrors, setFieldErrors] = useState({})
+  const profileRequestIdRef = useRef(0)
+  const saveInProgressRef = useRef(false)
   const loadProfile = async () => {
+    if (saveInProgressRef.current || photoSaving) return
+    const requestId = ++profileRequestIdRef.current
     try {
       setProfileLoading(true)
       setLoadFailed(false)
       setError('')
-      const response = await apiRequest('/auth/eu/')
+      const response = requireProfileResponse(await apiRequest('/auth/eu/'))
+      if (requestId !== profileRequestIdRef.current) return
       onProfileChange(response)
       setForm({ nome: response?.nome || '', email: response?.email || '' })
     } catch (err) {
-      setError(err.message)
-      setLoadFailed(true)
+      if (requestId === profileRequestIdRef.current) {
+        setError(err.message)
+        setLoadFailed(true)
+      }
     } finally {
-      setProfileLoading(false)
+      if (requestId === profileRequestIdRef.current) setProfileLoading(false)
     }
   }
 
@@ -2091,29 +2249,45 @@ function ProfilePage({ profile, onLogout, onProfileChange }) {
   const handleChange = (event) => {
     const { name, value } = event.target
     setForm((current) => ({ ...current, [name]: value }))
+    setFieldErrors((current) => {
+      const next = { ...current }
+      delete next[name]
+      return next
+    })
+    setError('')
+    setSuccess('')
   }
 
   const handleSave = async (event) => {
     event.preventDefault()
-    if (saving) return
-    setSaving(true)
+    if (profileLoading || photoSaving || saving || saveInProgressRef.current) return
+    const nome = form.nome.trim()
     setLoadFailed(false)
     setError('')
+    setSuccess('')
     setFieldErrors({})
+    if (!nome) {
+      setFieldErrors({ nome: 'Este campo é obrigatório.' })
+      return
+    }
+
+    profileRequestIdRef.current += 1
+    saveInProgressRef.current = true
+    setSaving(true)
 
     try {
-      const response = await apiRequest('/auth/eu/', {
+      const response = requireProfileResponse(await apiRequest('/auth/eu/', {
         method: 'PATCH',
-        body: {
-          nome: form.nome,
-        },
-      })
+        body: { nome },
+      }))
       onProfileChange(response)
-      setForm((current) => ({ ...current, nome: response?.nome || current.nome }))
+      setForm((current) => ({ ...current, nome: response.nome, email: response.email || current.email }))
+      setSuccess('Seus dados foram atualizados com sucesso.')
     } catch (err) {
       setError(err.message)
       setFieldErrors(err.fields || {})
     } finally {
+      saveInProgressRef.current = false
       setSaving(false)
     }
   }
@@ -2129,16 +2303,22 @@ function ProfilePage({ profile, onLogout, onProfileChange }) {
       {location.state?.message ? <Alert type="success" message={location.state.message} /> : null}
       {profileLoading ? <LoadingState message="Carregando perfil" /> : null}
       {error ? <><Alert type="danger" message={error} />{loadFailed ? <button type="button" className="button-secondary" onClick={loadProfile}>Tentar de novo</button> : null}</> : null}
+      {success ? <Alert type="success" message={success} /> : null}
 
       <div className="card section-card">
-        <ProfilePhotoUpload profile={profile} onProfileChange={onProfileChange} />
+        <ProfilePhotoUpload
+          profile={profile}
+          onProfileChange={onProfileChange}
+          onLoadingChange={setPhotoSaving}
+          disabled={profileLoading || saving || photoSaving}
+        />
       </div>
 
       <div className="card section-card">
         <form className="stack-form" onSubmit={handleSave}>
           <label>
             Nome
-            <input name="nome" value={form.nome} onChange={handleChange} />
+            <input name="nome" value={form.nome} onChange={handleChange} disabled={profileLoading || saving || photoSaving} required />
             {fieldErrors.nome ? <small className="field-error">{fieldErrors.nome}</small> : null}
           </label>
           <label>
@@ -2146,7 +2326,7 @@ function ProfilePage({ profile, onLogout, onProfileChange }) {
             <input name="email" type="email" value={form.email} onChange={handleChange} disabled />
           </label>
 
-          <button type="submit" className="button-primary" disabled={saving}>
+          <button type="submit" className="button-primary" disabled={profileLoading || saving || photoSaving}>
             {saving ? 'Salvando...' : 'Salvar alterações'}
           </button>
         </form>
