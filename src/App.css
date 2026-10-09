@@ -13,6 +13,8 @@
   --line: #ead9d6;
   --danger: #8a3d49;
   --success: #3d6b52;
+  --button-color: #62343b;
+  --button-hover: #512a31;
   --shadow: 0 10px 30px rgba(76, 43, 48, .07);
   --shadow-hover: 0 16px 36px rgba(76, 43, 48, .12);
   --radius: 18px;
@@ -83,14 +85,10 @@
 
 /* 6. Buttons */
 .button-primary, .button-secondary, .button-ghost { display: inline-flex; min-height: 2.7rem; align-items: center; justify-content: center; gap: .5rem; padding: .68rem 1.05rem; border: 1px solid transparent; border-radius: 10px; font-size: .85rem; font-weight: 700; line-height: 1.2; transition: transform .18s ease, box-shadow .18s ease, background .18s ease, border-color .18s ease, color .18s ease; }
-.button-primary { color: #fffaf8; background: var(--primary-dark); box-shadow: 0 5px 14px rgba(107, 58, 63, .15); }
-.button-primary:hover { color: #fff; background: #573036; box-shadow: 0 8px 20px rgba(107, 58, 63, .2); transform: translateY(-1px); }
-.button-secondary { border-color: #dfc5c1; color: var(--dark); background: var(--surface-soft); }
-.button-secondary:hover { border-color: var(--secondary); background: #f4e3e1; transform: translateY(-1px); }
-.button-ghost { border-color: var(--line); color: var(--dark); background: transparent; }
-.button-ghost:hover { border-color: var(--secondary); background: var(--surface-soft); transform: translateY(-1px); }
-.button-danger { display: inline-flex; min-height: 2.7rem; align-items: center; justify-content: center; padding: .68rem 1.05rem; border: 1px solid transparent; border-radius: 10px; color: #fffaf8; background: var(--danger); font-size: .85rem; font-weight: 700; line-height: 1.2; transition: transform .18s ease, box-shadow .18s ease, background .18s ease; }
-.button-danger:hover { background: #71313b; box-shadow: 0 6px 16px rgba(138, 61, 73, .2); transform: translateY(-1px); }
+.button-primary, .button-secondary, .button-ghost { color: #fff; background: var(--button-color); box-shadow: 0 5px 14px rgba(98, 52, 59, .15); }
+.button-primary:hover, .button-secondary:hover, .button-ghost:hover { border-color: var(--button-hover); color: #fff; background: var(--button-hover); box-shadow: 0 8px 20px rgba(81, 42, 49, .2); transform: translateY(-1px); }
+.button-danger { display: inline-flex; min-height: 2.7rem; align-items: center; justify-content: center; padding: .68rem 1.05rem; border: 1px solid transparent; border-radius: 10px; color: #fff; background: var(--button-color); font-size: .85rem; font-weight: 700; line-height: 1.2; transition: transform .18s ease, box-shadow .18s ease, background .18s ease; }
+.button-danger:hover { color: #fff; background: var(--button-hover); box-shadow: 0 6px 16px rgba(81, 42, 49, .2); transform: translateY(-1px); }
 .small-button { min-height: 2.25rem; padding: .48rem .7rem; font-size: .76rem; }
 button:disabled { cursor: not-allowed; opacity: .58; transform: none !important; }
 button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 3px solid rgba(183, 110, 121, .36); outline-offset: 2px; }
@@ -186,6 +184,7 @@ legend { padding: 0 .35rem; color: var(--dark); font-size: .84rem; font-weight: 
 .staff-specialty { color: var(--muted); font-size: .78rem; }
 .staff-card p { display: -webkit-box; overflow: hidden; margin: .35rem 0 0; color: var(--muted); font-size: .82rem; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 .staff-card-action { width: 100%; margin-top: auto; }
+.staff-card-select { display: flex; min-width: 0; flex: 1; flex-direction: column; padding: 0; border: 0; color: inherit; background: transparent; text-align: inherit; cursor: pointer; }
 .profile-avatar { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; overflow: hidden; border-radius: 50%; color: var(--primary-dark); background: var(--primary-light); font-weight: 750; }
 .profile-avatar img { width: 100%; height: 100%; object-fit: cover; }
 .profile-avatar-default { width: 2.4rem; height: 2.4rem; font-size: .9rem; }
@@ -380,3 +379,7 @@ legend { padding: 0 .35rem; color: var(--dark); font-size: .84rem; font-weight: 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+.slot-resource-groups { display: grid; gap: 1rem; margin-top: 1rem; }
+.slot-resource-group h4 { margin: 0; color: var(--dark); font-size: .92rem; }
+.slot-resource-group .slot-grid { margin-top: .5rem; }

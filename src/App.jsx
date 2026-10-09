@@ -9,6 +9,7 @@ import {
   useNavigate,
   useParams,
 } from 'react-router-dom'
+import { buildAppointmentPayload, formatLocalDate, groupSlotsByResource, isSelectableDate, resolveRelatedName } from './utils/appointments.js'
 import './App.css'
 
 const API_BASE_URL =
@@ -19,6 +20,8 @@ const STORAGE_KEYS = {
   tokens: 'psicologia_tokens',
   profile: 'psicologia_profile',
 }
+
+let tokenRefreshPromise = null
 
 function readStoredJSON(key) {
   try {
@@ -84,31 +87,21 @@ function responseList(response) {
   return Array.isArray(response?.results) ? response.results : Array.isArray(response) ? response : []
 }
 
-function formatLocalDate(date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-}
-
-function resolveRelatedName(value, options = [], explicitName) {
-  if (explicitName && typeof explicitName === 'string' && Number.isNaN(Number(explicitName))) return explicitName
-  if (value && typeof value === 'object') {
-    if (value.nome || value.name) return value.nome || value.name
-    value = value.id
-  }
-  if (typeof value === 'string' && Number.isNaN(Number(value))) return value
-  if (value === undefined || value === null) return null
-  return options.find((option) => Number(option.id) === Number(value))?.nome || null
-}
-
 async function fetchAllPages(path) {
   const items = []
   let nextPath = path
+  const apiBase = new URL(`${API_BASE_URL.replace(/\/+$/, '')}/`)
+  const apiPrefix = apiBase.pathname.replace(/\/+$/, '')
 
   while (nextPath) {
     const response = await apiRequest(nextPath)
     items.push(...responseList(response))
     if (!response?.next) break
-    const nextUrl = new URL(response.next, window.location.origin)
-    nextPath = `${nextUrl.pathname.replace('/api', '')}${nextUrl.search}`
+    const nextUrl = new URL(response.next, apiBase)
+    if (nextUrl.origin !== apiBase.origin || !nextUrl.pathname.startsWith(`${apiPrefix}/`)) {
+      throw new Error('A paginação da API apontou para um endereço inesperado.')
+    }
+    nextPath = `${nextUrl.pathname.slice(apiPrefix.length)}${nextUrl.search}`
   }
 
   return items
@@ -153,6 +146,8 @@ function extractFieldErrors(payload) {
 
 async function apiRequest(path, options = {}) {
   const { _retried = false, _skipAuth = false, _retryCount = 0, ...fetchOptions } = options
+  const method = (fetchOptions.method || 'GET').toUpperCase()
+  const canRetry = method === 'GET' || method === 'HEAD'
   const storedTokens = readStoredJSON(STORAGE_KEYS.tokens)
   const token = storedTokens?.access
   const headers = { ...(fetchOptions.headers || {}) }
@@ -178,14 +173,14 @@ async function apiRequest(path, options = {}) {
   let response
   try {
     response = await fetch(`${API_BASE_URL}${path}`, requestInit)
-  } catch (error) {
-    if (_retryCount < 2) {
+  } catch {
+    if (canRetry && _retryCount < 2) {
       return apiRequest(path, { ...fetchOptions, _retried, _skipAuth, _retryCount: _retryCount + 1 })
     }
-    throw error
+    throw new Error('NÃ£o foi possÃ­vel conectar ao serviÃ§o. Verifique sua conexÃ£o e tente novamente.')
   }
 
-  if (response.status >= 500 && _retryCount < 2) {
+  if (canRetry && response.status >= 500 && _retryCount < 2) {
     return apiRequest(path, { ...fetchOptions, _retried, _skipAuth, _retryCount: _retryCount + 1 })
   }
 
@@ -194,28 +189,39 @@ async function apiRequest(path, options = {}) {
     ? await response.json().catch(() => null)
     : await response.text().catch(() => null)
 
-  if (response.status === 401 && token && !_retried && path !== '/auth/renovar/') {
+  const isPublicAuthRequest = ['/auth/login/', '/auth/cadastro/', '/auth/redefinir-senha/'].includes(path)
+  if (response.status === 401 && token && !_retried && path !== '/auth/renovar/' && !isPublicAuthRequest) {
     const refresh = storedTokens?.refresh
 
     if (refresh) {
       try {
-        const renewal = await apiRequest('/auth/renovar/', {
-          method: 'POST',
-          body: { refresh },
-          _retried: true,
-          _skipAuth: true,
-        })
-        const nextTokens = { ...storedTokens, ...renewal }
-        writeStoredJSON(STORAGE_KEYS.tokens, nextTokens)
+        if (!tokenRefreshPromise) {
+          tokenRefreshPromise = apiRequest('/auth/renovar/', {
+            method: 'POST',
+            body: { refresh },
+            _retried: true,
+            _skipAuth: true,
+          }).then((renewal) => {
+            const nextTokens = { ...storedTokens, ...renewal }
+            writeStoredJSON(STORAGE_KEYS.tokens, nextTokens)
+            return nextTokens
+          }).finally(() => {
+            tokenRefreshPromise = null
+          })
+        }
+        await tokenRefreshPromise
         return apiRequest(path, { ...fetchOptions, _retried: true })
-      } catch {
+      } catch (refreshError) {
         clearStoredAuth()
+        tokenRefreshPromise = null
+        window.location.assign('/login')
+        throw new Error('Sua sessÃ£o expirou. Entre novamente.', { cause: refreshError })
       }
     } else {
       clearStoredAuth()
+      window.location.assign('/login')
+      throw new Error('Sua sessÃ£o expirou. Entre novamente.')
     }
-
-    window.location.assign('/login')
   }
 
   if (!response.ok) {
@@ -225,6 +231,7 @@ async function apiRequest(path, options = {}) {
     if (response.status === 404) error.message = 'Não encontrado.'
     if (response.status === 403) error.message = 'Você não tem permissão para esta ação.'
     if (response.status === 429) error.message = 'Muitas tentativas, aguarde um minuto.'
+    if (response.status >= 500) error.message = 'O serviÃ§o estÃ¡ temporariamente indisponÃ­vel. Tente novamente.'
     throw error
   }
 
@@ -555,8 +562,7 @@ function App() {
   }
 
   const canAdmin = Boolean(
-    profile?.permissoes?.includes('api.change_organizacao') ||
-      profile?.permissoes?.includes('change_organizacao'),
+    profile?.permissoes?.includes('api.change_organizacao'),
   )
 
   const closeSidebar = () => setSidebarOpen(false)
@@ -677,7 +683,7 @@ function App() {
                 <ProfileAvatar profile={profile} size="header" />
                 <span>
                   <strong>{profile?.nome || 'Meu perfil'}</strong>
-                  <small className="header-role">Paciente</small>
+                <small className="header-role">{canAdmin ? 'Administrador' : 'Paciente'}</small>
                   <small className="header-profile-link">Ver meu perfil</small>
                 </span>
               </Link>
@@ -687,7 +693,7 @@ function App() {
           {flash.message ? <Alert type={flash.type} message={flash.message} /> : null}
 
           <Routes>
-            <Route path="/" element={<LandingPage />} />
+            <Route path="/" element={tokens ? (profile ? <Navigate to={canAdmin ? '/admin' : '/dashboard'} replace /> : null) : <LandingPage />} />
             <Route
               path="/login"
               element={tokens ? (profile ? <Navigate to={canAdmin ? '/admin' : '/dashboard'} replace /> : null) : <LoginPage onAuthSuccess={handleAuthSuccess} />}
@@ -706,7 +712,7 @@ function App() {
             <Route
               path="/agendar"
               element={
-                <ProtectedRoute isAuthenticated={Boolean(tokens)}>
+                <ProtectedRoute isAuthenticated={Boolean(tokens) && hasPermission(profile?.permissoes, 'api.add_agendamento')}>
                   <AppointmentFlowPage profile={profile} />
                 </ProtectedRoute>
               }
@@ -731,7 +737,7 @@ function App() {
               path="/sessao/:id/avaliar"
               element={
                 <ProtectedRoute isAuthenticated={Boolean(tokens)}>
-                  <ReviewAppointmentPage />
+                  <ReviewAppointmentPage profile={profile} />
                 </ProtectedRoute>
               }
             />
@@ -747,7 +753,7 @@ function App() {
               path="/psicologo/:id"
               element={
                 <ProtectedRoute isAuthenticated={Boolean(tokens)}>
-                  <PsychologistDetailPage />
+                  <PsychologistDetailPage profile={profile} />
                 </ProtectedRoute>
               }
             />
@@ -1181,6 +1187,7 @@ function DashboardPage({ profile }) {
   const [nextSession, setNextSession] = useState(null)
   const [serviceOptions, setServiceOptions] = useState([])
   const [resourceOptions, setResourceOptions] = useState([])
+  const [lookupError, setLookupError] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -1188,13 +1195,13 @@ function DashboardPage({ profile }) {
     try {
       setLoading(true)
       setError('')
-      const today = new Date().toISOString().slice(0, 10)
+      const today = formatLocalDate(new Date())
       const [org, agenda] = await Promise.all([
         apiRequest('/organizacao/'),
-        apiRequest(`/agendamentos/?data_inicio=${today}`),
+        fetchAllPages(`/agendamentos/?data_inicio=${today}`),
       ])
 
-      const appointments = Array.isArray(agenda?.results) ? agenda.results : Array.isArray(agenda) ? agenda : []
+      const appointments = agenda
       const upcoming = appointments
         .filter((appointment) => !['cancelado', 'concluido'].includes(appointment.status))
         .filter((appointment) => !appointment.inicio || new Date(appointment.inicio) >= new Date())
@@ -1218,7 +1225,7 @@ function DashboardPage({ profile }) {
         setServiceOptions(serviceList)
         setResourceOptions(resourceList)
       })
-      .catch(() => {})
+      .catch(() => setLookupError('NÃ£o foi possÃ­vel carregar os nomes dos serviÃ§os e profissionais.'))
   }, [])
 
   const nextServiceName = resolveRelatedName(nextSession?.servico, serviceOptions, nextSession?.servico_nome || nextSession?.nome_servico)
@@ -1230,9 +1237,7 @@ function DashboardPage({ profile }) {
         title="Painel do paciente"
         subtitle={profile?.nome ? `Bem-vindo(a), ${profile.nome}.` : 'Acompanhe seus atendimentos.'}
       >
-        <Link to="/agendar" className="button-primary">
-          Agendar nova sessão
-        </Link>
+        {hasPermission(profile?.permissoes, 'api.add_agendamento') ? <Link to="/agendar" className="button-primary">Agendar nova sessão</Link> : null}
       </PageHeader>
 
       {loading ? (
@@ -1251,7 +1256,9 @@ function DashboardPage({ profile }) {
           </div>
 
           <div className="card section-card">
+            {organization?.logo ? <img className="admin-image-preview" src={organization.logo} alt={`Logo de ${organization.nome || 'Psicologia'}`} /> : null}
             <h3>Próximo atendimento</h3>
+            {lookupError ? <Alert type="info" message={lookupError} /> : null}
             {nextSession ? (
               <div className="session-highlight">
                 <div>
@@ -1267,7 +1274,7 @@ function DashboardPage({ profile }) {
               <EmptyState
                 title="Você ainda não possui sessões agendadas"
                 description="Acesse o agendamento para escolher profissional e horário."
-                action={<Link to="/agendar" className="button-secondary">Agendar</Link>}
+                action={hasPermission(profile?.permissoes, 'api.add_agendamento') ? <Link to="/agendar" className="button-secondary">Agendar</Link> : null}
               />
             )}
           </div>
@@ -1290,29 +1297,19 @@ function AppointmentFlowPage() {
   const [observacoes, setObservacoes] = useState('')
   const [fieldErrors, setFieldErrors] = useState({})
   const [submittedAppointment, setSubmittedAppointment] = useState(null)
-  const [step, setStep] = useState(location.state?.resource ? 2 : 1)
+  const [step, setStep] = useState(1)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [loaded, setLoaded] = useState(false)
   const slotsRequestId = useRef(0)
   const dateInputRef = useRef(null)
   const preselectedResource = location.state?.resource || null
-  const hoje = new Date()
-  const min = formatLocalDate(hoje)
-
-  const listResponse = (response) =>
-    Array.isArray(response?.results)
-      ? response.results
-      : Array.isArray(response?.horarios)
-        ? response.horarios
-        : Array.isArray(response)
-          ? response
-          : []
+  const [min] = useState(() => formatLocalDate(new Date()))
 
   const availableServices = selectedResource?.id
     ? services.filter((service) => {
         if (Array.isArray(selectedResource.servicos)) {
-          return selectedResource.servicos.some((serviceId) => Number(serviceId) === Number(service.id))
+          return selectedResource.servicos.some((relatedService) => Number(relatedService?.id ?? relatedService) === Number(service.id))
         }
         if (Array.isArray(service.recursos)) {
           return service.recursos.some((resourceId) => Number(resourceId) === Number(selectedResource.id))
@@ -1340,13 +1337,11 @@ function AppointmentFlowPage() {
     })
   }
 
-  const loadResources = async () => {
+  const loadServices = async () => {
     try {
       setLoading(true)
       setError('')
-      const response = await apiRequest('/recursos/')
-      setResources(listResponse(response))
-      setLoaded(true)
+      setServices(await fetchAllPages('/servicos/'))
     } catch (err) {
       setError(err.message)
     } finally {
@@ -1357,18 +1352,22 @@ function AppointmentFlowPage() {
   const handleSelectResource = async (resource) => {
     slotsRequestId.current += 1
     setSelectedResource(resource)
-    setSelectedService(null)
     setDate('')
     setDateError('')
     if (dateInputRef.current) dateInputRef.current.value = ''
     setSlots([])
     setSelectedSlot(null)
     setError('')
-    setStep(2)
+    setStep(3)
+  }
+
+  const loadResources = async () => {
+    if (!selectedService?.id) return
     try {
       setLoading(true)
-      const response = await apiRequest('/servicos/')
-      setServices(listResponse(response))
+      setError('')
+      setResources(await fetchAllPages(`/recursos/?servicos=${selectedService.id}`))
+      setLoaded(true)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -1377,21 +1376,34 @@ function AppointmentFlowPage() {
   }
 
   useEffect(() => {
-    if (preselectedResource) {
-      handleSelectResource(preselectedResource)
-    } else {
-      loadResources()
-    }
+    if (preselectedResource) setSelectedResource(preselectedResource)
+    loadServices()
   }, [])
 
   const handleSelectService = async (service) => {
     setSelectedService(service)
     setDate('')
     setDateError('')
+    setResources([])
+    setLoaded(false)
     if (dateInputRef.current) dateInputRef.current.value = ''
     setSlots([])
     setSelectedSlot(null)
-    setStep(3)
+    if (selectedResource?.id) {
+      setStep(3)
+      return
+    }
+    setStep(2)
+    try {
+      setLoading(true)
+      setError('')
+      setResources(await fetchAllPages(`/recursos/?servicos=${service.id}`))
+      setLoaded(true)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
   }
 
   const loadSlotsFor = async (service, resource, selectedDate) => {
@@ -1423,7 +1435,7 @@ function AppointmentFlowPage() {
       setDateError('')
       return
     }
-    if (value < min) {
+    if (!isSelectableDate(value, min)) {
       setDateError('Não é possível selecionar uma data que já passou. Escolha uma data futura.')
       slotsRequestId.current += 1
       setSlots([])
@@ -1462,12 +1474,7 @@ function AppointmentFlowPage() {
       setLoading(true)
       setError('')
       setFieldErrors({})
-      const payload = {
-        servico: selectedService.id,
-        recurso: recursoId,
-        inicio: selectedSlot.inicio,
-        observacoes,
-      }
+      const payload = buildAppointmentPayload({ selectedService, selectedResource, selectedSlot, observacoes })
 
       const response = await apiRequest('/agendamentos/', {
         method: 'POST',
@@ -1489,6 +1496,8 @@ function AppointmentFlowPage() {
       setLoading(false)
     }
   }
+
+  const slotGroups = groupSlotsByResource(slots, selectedResource)
 
   if (step === 6) {
     const appointment = submittedAppointment || {}
@@ -1532,7 +1541,7 @@ function AppointmentFlowPage() {
       {error ? (
         <>
           <Alert type="danger" message={error} />
-          <button type="button" className="button-secondary" onClick={step === 1 ? loadResources : step === 2 ? () => handleSelectResource(selectedResource) : loadSlots}>
+          <button type="button" className="button-secondary" onClick={step === 1 ? loadServices : step === 2 ? loadResources : loadSlots}>
             Tentar de novo
           </button>
         </>
@@ -1541,19 +1550,6 @@ function AppointmentFlowPage() {
 
       {step === 1 && !loading ? (
         <div className="card section-card">
-          <h3>Escolha o psicólogo</h3>
-          {!loaded || resources.length === 0 ? <EmptyState title="Nenhum psicólogo disponível" description="Ainda não há profissionais disponíveis para agendamento." /> : (
-            <div className="staff-grid">
-              <button type="button" className="staff-card" onClick={() => handleSelectResource(null)}><div className="staff-card-content"><h3>Qualquer profissional</h3><p>Escolha entre os profissionais disponíveis para o serviço.</p></div></button>
-              {resources.map((resource) => <button type="button" key={resource.id} className="staff-card" onClick={() => handleSelectResource(resource)}><div className="staff-card-content">{resource.foto || resource.foto_url ? <img src={resource.foto || resource.foto_url} alt="" /> : null}<h3>{resource.nome}</h3>{resource.bio ? <p>{resource.bio}</p> : null}</div></button>)}
-            </div>
-          )}
-        </div>
-      ) : null}
-
-      {step === 2 && !loading ? (
-        <div className="card section-card">
-          <button type="button" className="back-button" onClick={() => setStep(1)}>← Voltar para profissionais</button>
           <h3>Escolha o serviço</h3>
           {availableServices.length === 0 ? <EmptyState title="Nenhum serviço disponível" description="Ainda não há serviços disponíveis para agendamento." /> : (
             <div className="service-grid">
@@ -1562,15 +1558,28 @@ function AppointmentFlowPage() {
           )}
         </div>
       ) : null}
+
+      {step === 2 && !loading ? (
+        <div className="card section-card">
+          <button type="button" className="back-button" onClick={() => { setSelectedService(null); setStep(1) }}>← Voltar para serviços</button>
+          <h3>Escolha o psicólogo</h3>
+          {!loaded || resources.length === 0 ? <EmptyState title="Nenhum psicólogo realiza este serviço" description="Ainda não há profissionais disponíveis para este serviço." /> : (
+            <div className="staff-grid">
+              <button type="button" className="staff-card" onClick={() => handleSelectResource(null)}><div className="staff-card-content"><h3>Qualquer profissional</h3><p>Escolha entre os profissionais disponíveis para o serviço.</p></div></button>
+              {resources.map((resource) => <article className="card staff-card" key={resource.id}><button type="button" className="staff-card-select" onClick={() => handleSelectResource(resource)}><div className="staff-card-content">{resource.foto || resource.foto_url ? <img src={resource.foto || resource.foto_url} alt="" /> : null}<h3>{resource.nome}</h3>{resource.bio ? <p>{resource.bio}</p> : null}</div></button><Link to={`/psicologo/${resource.id}`} className="button-secondary small-button">Ver avaliações</Link></article>)}
+            </div>
+          )}
+        </div>
+      ) : null}
       {step === 3 ? (
         <div className="card section-card">
-          <button type="button" className="back-button" onClick={() => setStep(2)}>← Voltar para serviços</button>
+          <button type="button" className="back-button" onClick={() => setStep(selectedResource ? 1 : 2)}>← Voltar</button>
           <h3>Escolha a data e o horário</h3>
           <label>Data<input ref={dateInputRef} type="date" min={min} defaultValue={date} onChange={(event) => handleSelectDate(event.target.value)} /></label>
           {dateError ? <p className="field-error" role="alert">{dateError}</p> : null}
           {date && loading ? <LoadingState message="Carregando horários disponíveis" /> : null}
           {date && !loading && !error && slots.length === 0 ? <><p className="muted">Sem horários livres neste dia. Tente outro dia.</p><button type="button" className="button-secondary" onClick={() => { const next = new Date(`${date}T12:00:00`); next.setDate(next.getDate() + 1); handleSelectDate(formatLocalDate(next)) }}>Próximo dia</button></> : null}
-          {slots.length > 0 ? <div className="slot-grid">{slots.map((slot) => <button type="button" key={`${slot.recurso?.id ?? selectedResource?.id ?? 'x'}-${slot.inicio}`} className="slot-item" onClick={() => handleSelectSlot(slot)}><span>{slot.recurso?.nome || selectedResource?.nome || 'Profissional'}</span><strong>{new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' }).format(new Date(slot.inicio))}</strong></button>)}</div> : null}
+          {slots.length > 0 ? <div className="slot-resource-groups">{slotGroups.map((group) => <section className="slot-resource-group" key={group.id}><h4>{group.nome}</h4><div className="slot-grid">{group.horarios.map((slot) => <button type="button" key={group.id + '-' + slot.inicio} className="slot-item" onClick={() => handleSelectSlot(slot)}><strong>{new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' }).format(new Date(slot.inicio))}</strong></button>)}</div></section>)}</div> : null}
         </div>
       ) : null}
 
@@ -1584,8 +1593,8 @@ function AppointmentFlowPage() {
           <p><strong>Horário:</strong> {selectedSlot?.horario || (selectedSlot?.inicio ? new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' }).format(new Date(selectedSlot.inicio)) : 'Horário não informado')}</p>
           {selectedService?.duracao_min !== undefined ? <p><strong>Duração:</strong> {selectedService.duracao_min} min</p> : null}
           {selectedService?.preco !== undefined ? <p><strong>Preço:</strong> {formatCurrency(selectedService.preco)}</p> : null}
-          <label>Observações<textarea value={observacoes} onChange={(event) => setObservacoes(event.target.value)} /></label>
-          <p className="muted">Evite informar dados pessoais ou informações sensíveis desnecessárias.</p>
+          <label>Observações (recados sobre a agenda)<textarea value={observacoes} onChange={(event) => setObservacoes(event.target.value)} /></label>
+          <p className="muted">Use este campo apenas para recados de agenda. Não informe dados clínicos.</p>
           <FieldErrors errors={fieldErrors} />
           {error ? <Alert type="danger" message={error} /> : null}
           <button type="button" className="button-primary" onClick={handleConfirm} disabled={loading}>Confirmar agendamento</button>
@@ -1594,10 +1603,11 @@ function AppointmentFlowPage() {
   )
 }
 
-function MyAppointmentsPage() {
+function MyAppointmentsPage({ profile }) {
   const [appointments, setAppointments] = useState([])
   const [serviceOptions, setServiceOptions] = useState([])
   const [resourceOptions, setResourceOptions] = useState([])
+  const [lookupError, setLookupError] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [tab, setTab] = useState('upcoming')
@@ -1637,7 +1647,7 @@ function MyAppointmentsPage() {
         setServiceOptions(serviceList)
         setResourceOptions(resourceList)
       })
-      .catch(() => {})
+      .catch(() => setLookupError('NÃ£o foi possÃ­vel carregar os nomes dos serviÃ§os e profissionais.'))
   }, [])
 
   const visibleAppointments = tab === 'upcoming'
@@ -1661,6 +1671,7 @@ function MyAppointmentsPage() {
       {error ? <><Alert type="danger" message={error} /><button type="button" className="button-secondary" onClick={() => loadAppointments(tab, historyPage)}>Tentar de novo</button></> : null}
 
       <div className="card section-card">
+        {lookupError ? <Alert type="info" message={lookupError} /> : null}
         {!loading && !error && visibleAppointments.length > 0 ? (
           <div className="list-stack">
             {visibleAppointments.map((item) => (
@@ -1681,7 +1692,7 @@ function MyAppointmentsPage() {
           <EmptyState
             title={tab === 'upcoming' ? 'Nenhuma sessão próxima' : 'Nenhuma sessão no histórico'}
             description="Não há sessões para exibir."
-            action={<Link to="/agendar" className="button-primary">Agendar</Link>}
+            action={hasPermission(profile?.permissoes, 'api.add_agendamento') ? <Link to="/agendar" className="button-primary">Agendar</Link> : null}
           />
         ) : null}
       </div>
@@ -1698,9 +1709,7 @@ function PsychologistsPage() {
       try {
         setLoading(true)
         setError('')
-        const response = await apiRequest('/recursos/')
-        const list = Array.isArray(response?.results) ? response.results : Array.isArray(response) ? response : []
-        setPsychologists(list)
+        setPsychologists(await fetchAllPages('/recursos/'))
       } catch (err) {
         setError(err.message)
       } finally {
@@ -1770,6 +1779,7 @@ function AppointmentDetailPage({ profile }) {
   const [appointment, setAppointment] = useState(null)
   const [serviceOptions, setServiceOptions] = useState([])
   const [resourceOptions, setResourceOptions] = useState([])
+  const [lookupError, setLookupError] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [actionMessage, setActionMessage] = useState('')
@@ -1787,6 +1797,11 @@ function AppointmentDetailPage({ profile }) {
       ])
       setServiceOptions(serviceResult.status === 'fulfilled' ? serviceResult.value : [])
       setResourceOptions(resourceResult.status === 'fulfilled' ? resourceResult.value : [])
+      if (serviceResult.status === 'rejected' || resourceResult.status === 'rejected') {
+        setLookupError('NÃ£o foi possÃ­vel carregar os nomes dos serviÃ§os e profissionais.')
+      } else {
+        setLookupError('')
+      }
     } catch (err) {
       setError(err.message)
     } finally {
@@ -1798,7 +1813,7 @@ function AppointmentDetailPage({ profile }) {
 
   const permissions = readStoredJSON(STORAGE_KEYS.profile)?.permissoes
   const canReview = hasPermission(permissions, 'api.avaliar_agendamento')
-  const canCancel = ['solicitado', 'confirmado'].includes(appointment?.status)
+  const canCancel = hasPermission(permissions, 'api.cancelar_agendamento') && ['solicitado', 'confirmado'].includes(appointment?.status)
   const handleCancel = async () => {
     try {
       setCancelLoading(true)
@@ -1828,6 +1843,7 @@ function AppointmentDetailPage({ profile }) {
       {location.state?.message ? <Alert type="success" message={location.state.message} /> : null}
       {actionMessage ? <Alert type={actionMessage.includes('sucesso') ? 'success' : 'danger'} message={actionMessage} /> : null}
       <div className="card section-card">
+        {lookupError ? <Alert type="info" message={lookupError} /> : null}
         <h3>{serviceName || resourceName || 'Sessão'}</h3>
         <p><strong>Psicólogo:</strong> {resourceName || 'Não informado'}</p>
         <p><strong>Cliente:</strong> {clientName || 'Não informado'}</p>
@@ -1859,14 +1875,31 @@ function AppointmentDetailPage({ profile }) {
   )
 }
 
-function ReviewAppointmentPage() {
+function ReviewAppointmentPage({ profile }) {
   const { id } = useParams()
   const navigate = useNavigate()
+  const [appointment, setAppointment] = useState(null)
+  const [checking, setChecking] = useState(true)
   const [rating, setRating] = useState(0)
   const [comment, setComment] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [fieldErrors, setFieldErrors] = useState({})
+  const canReview = hasPermission(profile?.permissoes, 'api.avaliar_agendamento')
+
+  const loadAppointment = async () => {
+    try {
+      setChecking(true)
+      setError('')
+      setAppointment(await apiRequest(`/agendamentos/${id}/`))
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  useEffect(() => { loadAppointment() }, [id])
 
   const handleSubmit = async (event) => {
     event.preventDefault()
@@ -1891,6 +1924,16 @@ function ReviewAppointmentPage() {
     }
   }
 
+  const existingReview = appointment?.avaliacao || appointment?.avaliacoes?.[0]
+  const alreadyReviewed = (appointment?.nota !== undefined && appointment?.nota !== null) || Boolean(existingReview)
+  const eligible = appointment?.status === 'concluido' && !alreadyReviewed
+
+  if (!profile) return <section className="page-block"><LoadingState message="Carregando perfil" /></section>
+  if (!canReview) return <section className="page-block"><BackButton label="Voltar para sessão" to={`/sessao/${id}`} /><Alert type="danger" message="Você não tem permissão para avaliar esta sessão." /></section>
+  if (checking) return <section className="page-block"><BackButton label="Voltar para sessão" to={`/sessao/${id}`} /><LoadingState message="Carregando sessão" /></section>
+  if (error) return <section className="page-block"><BackButton label="Voltar para sessão" to={`/sessao/${id}`} /><Alert type="danger" message={error} /><button type="button" className="button-secondary" onClick={loadAppointment}>Tentar de novo</button></section>
+  if (!eligible) return <section className="page-block"><BackButton label="Voltar para sessão" to={`/sessao/${id}`} /><Alert type="info" message="Esta sessão não está disponível para avaliação." /></section>
+
   return (
     <section className="page-block">
       <PageHeader title="Avaliar sessão" subtitle="Compartilhe como foi seu atendimento." backLabel="Voltar para sessão" backTo={`/sessao/${id}`} />
@@ -1902,9 +1945,8 @@ function ReviewAppointmentPage() {
               {[1, 2, 3, 4, 5].map((value) => <button type="button" key={value} className={rating === value ? 'button-primary' : 'button-secondary'} onClick={() => setRating(value)}>{value}</button>)}
             </div>
           </fieldset>
-          <p className="muted">Evite informar dados pessoais ou informações sensíveis desnecessárias.</p>
+          <p className="muted">As avaliações ficam visíveis para todos os pacientes, sem exibir seu nome. Evite informar dados pessoais ou clínicos no comentário.</p>
           <label>Comentário<textarea value={comment} onChange={(event) => setComment(event.target.value)} /></label>
-          <p className="muted">Evite informar dados pessoais ou informações sensíveis desnecessárias.</p>
           <FieldErrors errors={fieldErrors} />
           {error ? <Alert type="danger" message={error} /> : null}
           <button type="submit" className="button-primary" disabled={loading}>{loading ? 'Enviando...' : 'Enviar avaliação'}</button>
@@ -1914,7 +1956,7 @@ function ReviewAppointmentPage() {
   )
 }
 
-function PsychologistDetailPage() {
+function PsychologistDetailPage({ profile }) {
   const { id } = useParams()
   const navigate = useNavigate()
   const [professional, setProfessional] = useState(null)
@@ -1922,6 +1964,8 @@ function PsychologistDetailPage() {
   const [reviews, setReviews] = useState([])
   const [reviewNext, setReviewNext] = useState(false)
   const [reviewPage, setReviewPage] = useState(1)
+  const [reviewLoading, setReviewLoading] = useState(false)
+  const [reviewError, setReviewError] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -1929,13 +1973,12 @@ function PsychologistDetailPage() {
     try {
       setLoading(true)
       setError('')
-      const [resource, serviceResponse, reviewResponse] = await Promise.all([
+      const [resource, allServices, reviewResponse] = await Promise.all([
         apiRequest(`/recursos/${id}/`),
-        apiRequest('/servicos/'),
+        fetchAllPages('/servicos/'),
         apiRequest(`/avaliacoes/?recurso=${id}`),
       ])
       setProfessional(resource)
-      const allServices = Array.isArray(serviceResponse?.results) ? serviceResponse.results : Array.isArray(serviceResponse) ? serviceResponse : []
           const directServices = Array.isArray(resource.servicos) ? resource.servicos : Array.isArray(resource.servicos_oferecidos) ? resource.servicos_oferecidos : []
           const resourceServiceIds = directServices.map((item) => item.id || item)
           setServices(directServices.length > 0 && typeof directServices[0] === 'object'
@@ -1954,12 +1997,21 @@ function PsychologistDetailPage() {
   useEffect(() => { loadProfessional() }, [id])
 
   const loadMoreReviews = async () => {
+    if (reviewLoading) return
     const nextPage = reviewPage + 1
-    const response = await apiRequest(`/avaliacoes/?recurso=${id}&page=${nextPage}`)
-    const list = Array.isArray(response?.results) ? response.results : []
-    setReviews((current) => [...current, ...list])
-    setReviewPage(nextPage)
-    setReviewNext(Boolean(response?.next))
+    try {
+      setReviewLoading(true)
+      setReviewError('')
+      const response = await apiRequest(`/avaliacoes/?recurso=${id}&page=${nextPage}`)
+      const list = Array.isArray(response?.results) ? response.results : []
+      setReviews((current) => [...current, ...list])
+      setReviewPage(nextPage)
+      setReviewNext(Boolean(response?.next))
+    } catch (err) {
+      setReviewError(err.message)
+    } finally {
+      setReviewLoading(false)
+    }
   }
 
 
@@ -1992,12 +2044,13 @@ function PsychologistDetailPage() {
           {professional?.bio ? <p>{professional.bio}</p> : null}
         </div>
       </div>
-      <button type="button" className="button-primary" onClick={() => navigate('/agendar', { state: { resource: professional } })}>Agendar com este psicólogo</button>
+      {hasPermission(profile?.permissoes, 'api.add_agendamento') ? <button type="button" className="button-primary" onClick={() => navigate('/agendar', { state: { resource: professional } })}>Agendar com este psicólogo</button> : null}
       {services.length > 0 ? <div className="card section-card"><h3>Serviços</h3><div className="service-grid">{services.map((service) => <div className="service-card" key={service.id}><strong>{service.nome}</strong>{service.descricao ? <span>{service.descricao}</span> : null}</div>)}</div></div> : null}
       <div className="card section-card">
         <h3>Avaliações</h3>
-        {reviews.length === 0 ? <p className="muted">Nenhuma avaliação disponível.</p> : <div className="list-stack">{reviews.map((review) => <div className="list-item" key={review.id}><div><strong>{review.nota}/5</strong><p>{review.comentario || 'Sem comentário'}</p></div></div>)}</div>}
-        {reviewNext ? <button type="button" className="button-secondary" onClick={loadMoreReviews}>Carregar mais</button> : null}
+        {reviewError ? <Alert type="danger" message={reviewError} /> : null}
+        {reviews.length === 0 ? <p className="muted">Ainda sem avaliações.</p> : <div className="list-stack">{reviews.map((review) => <div className="list-item" key={review.id}><div><strong>{review.nota}/5</strong><p>{review.comentario || 'Sem comentário'}</p><p>Serviço: {resolveRelatedName(review.servico, services, review.servico_nome || review.nome_servico) || 'Não informado'}</p></div></div>)}</div>}
+        {reviewNext ? <button type="button" className="button-secondary" disabled={reviewLoading} onClick={loadMoreReviews}>{reviewLoading ? 'Carregando...' : 'Carregar mais'}</button> : null}
       </div>
     </section>
   )
@@ -2006,21 +2059,28 @@ function PsychologistDetailPage() {
 function ProfilePage({ profile, onLogout, onProfileChange }) {
   const location = useLocation()
   const [form, setForm] = useState({ nome: profile?.nome || '', email: profile?.email || '' })
+  const [profileLoading, setProfileLoading] = useState(true)
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [fieldErrors, setFieldErrors] = useState({})
-  useEffect(() => {
-    const loadProfile = async () => {
-      try {
-        const response = await apiRequest('/auth/eu/')
-        onProfileChange(response)
-        setForm({ nome: response?.nome || '', email: response?.email || '' })
-      } catch (err) {
-        setError(err.message)
-      }
+  const loadProfile = async () => {
+    try {
+      setProfileLoading(true)
+      setLoadFailed(false)
+      setError('')
+      const response = await apiRequest('/auth/eu/')
+      onProfileChange(response)
+      setForm({ nome: response?.nome || '', email: response?.email || '' })
+    } catch (err) {
+      setError(err.message)
+      setLoadFailed(true)
+    } finally {
+      setProfileLoading(false)
     }
+  }
 
-    loadProfile()
-  }, [])
+  useEffect(() => { loadProfile() }, [])
 
   const organizationName =
     profile?.organizacao?.nome ||
@@ -2035,6 +2095,9 @@ function ProfilePage({ profile, onLogout, onProfileChange }) {
 
   const handleSave = async (event) => {
     event.preventDefault()
+    if (saving) return
+    setSaving(true)
+    setLoadFailed(false)
     setError('')
     setFieldErrors({})
 
@@ -2050,6 +2113,8 @@ function ProfilePage({ profile, onLogout, onProfileChange }) {
     } catch (err) {
       setError(err.message)
       setFieldErrors(err.fields || {})
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -2062,6 +2127,8 @@ function ProfilePage({ profile, onLogout, onProfileChange }) {
         backTo="/dashboard"
       />
       {location.state?.message ? <Alert type="success" message={location.state.message} /> : null}
+      {profileLoading ? <LoadingState message="Carregando perfil" /> : null}
+      {error ? <><Alert type="danger" message={error} />{loadFailed ? <button type="button" className="button-secondary" onClick={loadProfile}>Tentar de novo</button> : null}</> : null}
 
       <div className="card section-card">
         <ProfilePhotoUpload profile={profile} onProfileChange={onProfileChange} />
@@ -2079,10 +2146,9 @@ function ProfilePage({ profile, onLogout, onProfileChange }) {
             <input name="email" type="email" value={form.email} onChange={handleChange} disabled />
           </label>
 
-          <button type="submit" className="button-primary">
-            Salvar alterações
+          <button type="submit" className="button-primary" disabled={saving}>
+            {saving ? 'Salvando...' : 'Salvar alterações'}
           </button>
-          {error ? <Alert type="danger" message={error} /> : null}
         </form>
       </div>
 
@@ -2193,56 +2259,51 @@ function ChangePasswordPage() {
 }
 
 function AdminDashboardPage() {
-  const [stats, setStats] = useState({
-    totalAgendamentos: 0,
-    pendentes: 0,
-    concluidos: 0,
-    profissionais: 0,
-    servicos: 0,
-  })
+  const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  useEffect(() => {
-    const loadSummary = async () => {
-      try {
-        setLoading(true)
-        const [agenda, resources, services] = await Promise.all([
-          apiRequest('/agendamentos/?status=solicitado'),
-          apiRequest('/recursos/'),
-          apiRequest('/servicos/'),
-        ])
+  const loadSummary = async () => {
+    try {
+      setLoading(true)
+      setError('')
+      const [pending, completed, resources, services] = await Promise.all([
+        fetchAllPages('/agendamentos/?status=solicitado'),
+        fetchAllPages('/agendamentos/?status=concluido'),
+        fetchAllPages('/recursos/'),
+        fetchAllPages('/servicos/'),
+      ])
 
-        setStats({
-          totalAgendamentos: Array.isArray(agenda?.results) ? agenda.results.length : 0,
-          pendentes: Array.isArray(agenda?.results) ? agenda.results.length : 0,
-          concluidos: 0,
-          profissionais: Array.isArray(resources?.results) ? resources.results.length : Array.isArray(resources) ? resources.length : 0,
-          servicos: Array.isArray(services?.results) ? services.results.length : Array.isArray(services) ? services.length : 0,
-        })
-      } catch (err) {
-        setError(err.message)
-      } finally {
-        setLoading(false)
-      }
+      setStats({
+        pendentes: pending.length,
+        concluidos: completed.length,
+        profissionais: resources.length,
+        servicos: services.length,
+      })
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
     }
+  }
 
-    loadSummary()
-  }, [])
+  useEffect(() => { loadSummary() }, [])
 
   return (
     <section className="page-block">
       <PageHeader title="Administração" subtitle="Visão geral do consultório e das solicitações." />
 
       {loading ? <LoadingState message="Carregando visão geral" /> : null}
-      {error ? <Alert type="danger" message={error} /> : null}
+      {error ? <><Alert type="danger" message={error} /><button type="button" className="button-secondary" onClick={loadSummary}>Tentar de novo</button></> : null}
 
-      <div className="stats-grid admin-grid">
-        <StatCard label="Pendentes" value={stats.pendentes} accent="primary" />
-        <StatCard label="Profissionais" value={stats.profissionais} accent="secondary" />
-        <StatCard label="Serviços" value={stats.servicos} accent="tertiary" />
-        <StatCard label="Concluídos" value={stats.concluidos} accent="primary" />
-      </div>
+      {!loading && !error && stats ? (
+        <div className="stats-grid admin-grid">
+          <StatCard label="Pendentes" value={stats.pendentes} accent="primary" />
+          <StatCard label="Profissionais" value={stats.profissionais} accent="secondary" />
+          <StatCard label="Serviços" value={stats.servicos} accent="tertiary" />
+          <StatCard label="Concluídos" value={stats.concluidos} accent="primary" />
+        </div>
+      ) : null}
     </section>
   )
 }
@@ -2251,6 +2312,7 @@ function AdminAgendaPage() {
   const [date, setDate] = useState(() => formatLocalDate(new Date()))
   const [resourceId, setResourceId] = useState('')
   const [resources, setResources] = useState([])
+  const [services, setServices] = useState([])
   const [agenda, setAgenda] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -2258,8 +2320,8 @@ function AdminAgendaPage() {
     try {
       setLoading(true); setError('')
       const query = `/agendamentos/?data_inicio=${date}&data_fim=${date}${resourceId ? `&recurso=${resourceId}` : ''}`
-      const [items, resourceList] = await Promise.all([fetchAllPages(query), apiRequest('/recursos/')])
-      setAgenda(items.sort((first, second) => new Date(first.inicio) - new Date(second.inicio))); setResources(responseList(resourceList))
+      const [items, resourceList, serviceList] = await Promise.all([fetchAllPages(query), fetchAllPages('/recursos/'), fetchAllPages('/servicos/')])
+      setAgenda(items.sort((first, second) => new Date(first.inicio) - new Date(second.inicio))); setResources(resourceList); setServices(serviceList)
     } catch (err) { setError(err.message) } finally { setLoading(false) }
   }
   useEffect(() => { load() }, [date, resourceId])
@@ -2267,25 +2329,27 @@ function AdminAgendaPage() {
     <section className="page-block"><PageHeader title="Agenda do dia" subtitle="Acompanhe os atendimentos do consultório." backLabel="Voltar para administração" backTo="/admin" />
       <div className="date-row"><label>Dia<input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label><label>Psicólogo<select value={resourceId} onChange={(event) => setResourceId(event.target.value)}><option value="">Todos</option>{resources.map((resource) => <option key={resource.id} value={resource.id}>{resource.nome}</option>)}</select></label></div>
       {loading ? <LoadingState message="Consultando agenda" /> : null}{error ? <><Alert type="danger" message={error} /><button type="button" className="button-secondary" onClick={load}>Tentar de novo</button></> : null}
-      {!loading && !error ? <div className="card section-card">{agenda.length ? <div className="list-stack">{agenda.map((item) => <Link to={`/admin/sessao/${item.id}`} className="list-item" key={item.id}><div><strong>{item.servico?.nome || item.servico || 'Sessão'}</strong><p>{item.recurso?.nome || item.recurso || 'Psicólogo'} • {item.cliente?.nome || item.cliente || 'Paciente'} • {formatDate(item.inicio)}</p><p>{item.observacoes || 'Sem observações.'}</p></div><span className="badge">{formatStatus(item.status)}</span></Link>)}</div> : <EmptyState title="Nenhum atendimento neste dia" description="A agenda não possui atendimentos para o filtro selecionado." />}</div> : null}
+      {!loading && !error ? <div className="card section-card">{agenda.length ? <div className="list-stack">{agenda.map((item) => { const serviceName = resolveRelatedName(item.servico, services, item.servico_nome || item.nome_servico); const resourceName = resolveRelatedName(item.recurso, resources, item.recurso_nome || item.psicologo_nome); return <Link to={`/admin/sessao/${item.id}`} className="list-item" key={item.id}><div><strong>{serviceName || resourceName || 'Sessão'}</strong><p>{resourceName || 'Psicólogo'} • {item.cliente?.nome || item.cliente_nome || item.paciente?.nome || 'Paciente'} • {formatDate(item.inicio)}</p><p>{item.observacoes || 'Sem observações.'}</p></div><span className="badge">{formatStatus(item.status)}</span></Link> })}</div> : <EmptyState title="Nenhum atendimento neste dia" description="A agenda não possui atendimentos para o filtro selecionado." />}</div> : null}
     </section>
   )
 }
 
 function AdminRequestsPage({ permissions }) {
-  const [requests, setRequests] = useState([]); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [actionId, setActionId] = useState('')
-  const load = async () => { try { setLoading(true); setError(''); setRequests((await fetchAllPages('/agendamentos/?status=solicitado')).sort((first, second) => new Date(first.inicio) - new Date(second.inicio))) } catch (err) { setError(err.message) } finally { setLoading(false) } }
+  const [requests, setRequests] = useState([]); const [services, setServices] = useState([]); const [resources, setResources] = useState([]); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [actionId, setActionId] = useState('')
+  const load = async () => { try { setLoading(true); setError(''); const [items, serviceList, resourceList] = await Promise.all([fetchAllPages('/agendamentos/?status=solicitado'), fetchAllPages('/servicos/'), fetchAllPages('/recursos/')]); setRequests(items.sort((first, second) => new Date(first.inicio) - new Date(second.inicio))); setServices(serviceList); setResources(resourceList) } catch (err) { setError(err.message) } finally { setLoading(false) } }
   useEffect(() => { load() }, [])
   const action = async (id, endpoint) => { if (endpoint === 'cancelar' && !window.confirm('Cancelar este agendamento?')) return; try { setActionId(id); setError(''); await apiRequest(`/agendamentos/${id}/${endpoint}/`, { method: 'POST' }); await load() } catch (err) { setError(err.message) } finally { setActionId('') } }
-  return <section className="page-block"><PageHeader title="Pedidos para confirmar" subtitle="Revise e responda às solicitações." backLabel="Voltar para administração" backTo="/admin" />{loading ? <LoadingState message="Carregando solicitações" /> : null}{error ? <><Alert type="danger" message={error} /><button type="button" className="button-secondary" onClick={load}>Tentar de novo</button></> : null}<div className="card section-card">{!loading && !error && requests.length === 0 ? <EmptyState title="Nenhum pedido para confirmar" description="A fila está vazia." /> : <div className="list-stack">{requests.map((item) => <div className="list-item" key={item.id}><div><strong>{item.cliente?.nome || item.cliente || 'Paciente'}</strong><p>{item.servico?.nome || item.servico || 'Sessão'} • {item.recurso?.nome || item.recurso || 'Psicólogo'} • {formatDate(item.inicio)}</p><p>{item.observacoes || 'Sem observações.'}</p></div><div className="meta-actions">{hasPermission(permissions, 'api.confirmar_agendamento') ? <button type="button" className="button-primary small-button" disabled={actionId === item.id} onClick={() => action(item.id, 'confirmar')}>Confirmar</button> : null}{hasPermission(permissions, 'api.cancelar_agendamento') ? <button type="button" className="button-secondary small-button" disabled={actionId === item.id} onClick={() => action(item.id, 'cancelar')}>Cancelar</button> : null}</div></div>)}</div>}</div></section>
+  return <section className="page-block"><PageHeader title="Pedidos para confirmar" subtitle="Revise e responda às solicitações." backLabel="Voltar para administração" backTo="/admin" />{loading ? <LoadingState message="Carregando solicitações" /> : null}{error ? <><Alert type="danger" message={error} /><button type="button" className="button-secondary" onClick={load}>Tentar de novo</button></> : null}<div className="card section-card">{!loading && !error && requests.length === 0 ? <EmptyState title="Nenhum pedido para confirmar" description="A fila está vazia." /> : <div className="list-stack">{requests.map((item) => { const serviceName = resolveRelatedName(item.servico, services, item.servico_nome || item.nome_servico); const resourceName = resolveRelatedName(item.recurso, resources, item.recurso_nome || item.psicologo_nome); return <div className="list-item" key={item.id}><div><strong>{item.cliente?.nome || item.cliente_nome || item.paciente?.nome || 'Paciente'}</strong><p>{serviceName || 'Sessão'} • {resourceName || 'Psicólogo'} • {formatDate(item.inicio)}</p><p>{item.observacoes || 'Sem observações.'}</p></div><div className="meta-actions">{hasPermission(permissions, 'api.confirmar_agendamento') ? <button type="button" className="button-primary small-button" disabled={actionId === item.id} onClick={() => action(item.id, 'confirmar')}>Confirmar</button> : null}{hasPermission(permissions, 'api.cancelar_agendamento') ? <button type="button" className="button-secondary small-button" disabled={actionId === item.id} onClick={() => action(item.id, 'cancelar')}>Cancelar</button> : null}</div></div> })}</div>}</div></section>
 }
 
 function AdminAppointmentDetailPage({ permissions }) {
-  const { id } = useParams(); const [item, setItem] = useState(null); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [actionId, setActionId] = useState(''); const load = async () => { try { setLoading(true); setError(''); setItem(await apiRequest(`/agendamentos/${id}/`)) } catch (err) { setError(err.message) } finally { setLoading(false) } }; useEffect(() => { load() }, [id])
+  const { id } = useParams(); const [item, setItem] = useState(null); const [services, setServices] = useState([]); const [resources, setResources] = useState([]); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [actionId, setActionId] = useState(''); const load = async () => { try { setLoading(true); setError(''); const [appointment, serviceList, resourceList] = await Promise.all([apiRequest(`/agendamentos/${id}/`), fetchAllPages('/servicos/'), fetchAllPages('/recursos/')]); setItem(appointment); setServices(serviceList); setResources(resourceList) } catch (err) { setError(err.message) } finally { setLoading(false) } }; useEffect(() => { load() }, [id])
   const action = async (endpoint) => { if (endpoint === 'cancelar' && !window.confirm('Cancelar este agendamento?')) return; try { setActionId(endpoint); setError(''); await apiRequest(`/agendamentos/${id}/${endpoint}/`, { method: 'POST' }); await load() } catch (err) { setError(err.message) } finally { setActionId('') } }
   if (loading) return <section className="page-block"><BackButton label="Voltar para agenda" to="/admin/agenda" /><LoadingState message="Carregando sessão" /></section>
   if (error) return <section className="page-block"><BackButton label="Voltar para agenda" to="/admin/agenda" /><Alert type="danger" message={error} /><button type="button" className="button-secondary" onClick={load}>Tentar de novo</button></section>
-  return <section className="page-block"><PageHeader title="Detalhe da sessão" subtitle="Gerencie o agendamento conforme suas permissões." backLabel="Voltar para agenda" backTo="/admin/agenda" /><div className="card section-card"><p><strong>Paciente:</strong> {item.cliente?.nome || item.cliente || 'Não informado'}</p><p><strong>Serviço:</strong> {item.servico?.nome || item.servico || 'Não informado'}</p><p><strong>Psicólogo:</strong> {item.recurso?.nome || item.recurso || 'Não informado'}</p><p><strong>Data:</strong> {formatDate(item.inicio)}</p>{(item.duracao_min ?? item.duracao) !== undefined ? <p><strong>Duração:</strong> {item.duracao_min ?? item.duracao} min</p> : null}{item.preco !== undefined ? <p><strong>Preço:</strong> {formatCurrency(item.preco)}</p> : null}<p><strong>Observações:</strong> {item.observacoes || 'Nenhuma'}</p>{item.nota !== undefined && item.nota !== null ? <p><strong>Avaliação:</strong> {item.nota}/5</p> : null}{item.comentario ? <p><strong>Comentário:</strong> {item.comentario}</p> : null}<p><strong>Status:</strong> {formatStatus(item.status)}</p><div className="meta-actions">{item.status === 'solicitado' && hasPermission(permissions, 'api.confirmar_agendamento') ? <button className="button-primary" disabled={actionId === 'confirmar'} onClick={() => action('confirmar')}>Confirmar</button> : null}{item.status === 'confirmado' && hasPermission(permissions, 'api.concluir_agendamento') ? <button className="button-primary" disabled={actionId === 'concluir'} onClick={() => action('concluir')}>Concluir</button> : null}{['solicitado', 'confirmado'].includes(item.status) && hasPermission(permissions, 'api.cancelar_agendamento') ? <button className="button-secondary" disabled={actionId === 'cancelar'} onClick={() => action('cancelar')}>Cancelar</button> : null}</div></div></section>
+  const serviceName = resolveRelatedName(item.servico, services, item.servico_nome || item.nome_servico)
+  const resourceName = resolveRelatedName(item.recurso, resources, item.recurso_nome || item.psicologo_nome)
+  return <section className="page-block"><PageHeader title={serviceName || resourceName || 'Detalhe da sessão'} subtitle="Gerencie o agendamento conforme suas permissões." backLabel="Voltar para agenda" backTo="/admin/agenda" /><div className="card section-card"><p><strong>Paciente:</strong> {item.cliente?.nome || item.cliente_nome || item.paciente?.nome || 'Não informado'}</p><p><strong>Serviço:</strong> {serviceName || 'Não informado'}</p><p><strong>Psicólogo:</strong> {resourceName || 'Não informado'}</p><p><strong>Data:</strong> {formatDate(item.inicio)}</p>{(item.duracao_min ?? item.duracao) !== undefined ? <p><strong>Duração:</strong> {item.duracao_min ?? item.duracao} min</p> : null}{item.preco !== undefined ? <p><strong>Preço:</strong> {formatCurrency(item.preco)}</p> : null}<p><strong>Observações:</strong> {item.observacoes || 'Nenhuma'}</p>{item.nota !== undefined && item.nota !== null ? <p><strong>Avaliação:</strong> {item.nota}/5</p> : null}{item.comentario ? <p><strong>Comentário:</strong> {item.comentario}</p> : null}<p><strong>Status:</strong> {formatStatus(item.status)}</p><div className="meta-actions">{item.status === 'solicitado' && hasPermission(permissions, 'api.confirmar_agendamento') ? <button className="button-primary" disabled={actionId === 'confirmar'} onClick={() => action('confirmar')}>Confirmar</button> : null}{item.status === 'confirmado' && hasPermission(permissions, 'api.concluir_agendamento') ? <button className="button-primary" disabled={actionId === 'concluir'} onClick={() => action('concluir')}>Concluir</button> : null}{['solicitado', 'confirmado'].includes(item.status) && hasPermission(permissions, 'api.cancelar_agendamento') ? <button className="button-secondary" disabled={actionId === 'cancelar'} onClick={() => action('cancelar')}>Cancelar</button> : null}</div></div></section>
 }
 
 function AdminBusinessPage({ permissions }) {
@@ -2298,47 +2362,268 @@ function AdminBusinessPage({ permissions }) {
 
 function AdminResourcesPage({ permissions }) {
   const [active, setActive] = useState('true'); const [resources, setResources] = useState([]); const [loading, setLoading] = useState(true); const [error, setError] = useState('')
-  const canEdit = hasPermission(permissions, 'api.change_recurso') || hasPermission(permissions, 'api.add_recurso')
+  const canAdd = hasPermission(permissions, 'api.add_recurso')
+  const canChange = hasPermission(permissions, 'api.change_recurso')
   const load = async () => { try { setLoading(true); setError(''); setResources(await fetchAllPages(`/recursos/?ativo=${active}`)) } catch (err) { setError(err.message) } finally { setLoading(false) } }; useEffect(() => { load() }, [active])
   const toggle = async (resource) => { const isActive = resource.ativo !== false; const actionLabel = isActive ? 'desativar' : 'ativar'; if (!window.confirm(`Deseja ${actionLabel} este psicólogo?`)) return; try { await apiRequest(`/recursos/${resource.id}/`, { method: 'PATCH', body: { ativo: !isActive } }); await load() } catch (err) { setError(err.message) } }
-  return <section className="page-block"><PageHeader title="Psicólogos" subtitle="Gerencie profissionais ativos e inativos." backLabel="Voltar para administração" backTo="/admin">{canEdit ? <Link to="/admin/psicologos/novo" className="button-primary">Novo psicólogo</Link> : null}</PageHeader><div className="meta-actions"><button className={active === 'true' ? 'button-primary' : 'button-secondary'} onClick={() => setActive('true')}>Ativos</button><button className={active === 'false' ? 'button-primary' : 'button-secondary'} onClick={() => setActive('false')}>Inativos</button></div>{loading ? <LoadingState message="Carregando psicólogos" /> : null}{error ? <><Alert type="danger" message={error} /><button className="button-secondary" onClick={load}>Tentar de novo</button></> : null}{!loading && !error && !resources.length ? <EmptyState title="Nenhum psicólogo encontrado" description="Não há profissionais para este filtro." /> : <div className="staff-grid">{resources.map((resource) => { const isActive = resource.ativo !== false; return <article className="card staff-card" key={resource.id}><ProfileAvatar profile={resource} size="professional" /><div className="staff-card-content"><h3>{resource.nome}</h3>{resource.bio ? <p>{resource.bio}</p> : null}{resource.capacidade !== undefined ? <span>Capacidade: {resource.capacidade}</span> : null}<span className="badge">{isActive ? 'Ativo' : 'Inativo'}</span></div>{canEdit ? <div className="meta-actions"><Link to={`/admin/psicologos/${resource.id}/editar`} className="button-primary small-button">Editar</Link><Link to={`/admin/psicologos/${resource.id}/horarios`} className="button-secondary small-button">Horários</Link><button className="button-ghost small-button" onClick={() => toggle(resource)}>{isActive ? 'Desativar' : 'Ativar'}</button></div> : null}</article> })}</div>}</section>
+  return <section className="page-block"><PageHeader title="Psicólogos" subtitle="Gerencie profissionais ativos e inativos." backLabel="Voltar para administração" backTo="/admin">{canAdd ? <Link to="/admin/psicologos/novo" className="button-primary">Novo psicólogo</Link> : null}</PageHeader><div className="meta-actions"><button className={active === 'true' ? 'button-primary' : 'button-secondary'} onClick={() => setActive('true')}>Ativos</button><button className={active === 'false' ? 'button-primary' : 'button-secondary'} onClick={() => setActive('false')}>Inativos</button></div>{loading ? <LoadingState message="Carregando psicólogos" /> : null}{error ? <><Alert type="danger" message={error} /><button className="button-secondary" onClick={load}>Tentar de novo</button></> : null}{!loading && !error && !resources.length ? <EmptyState title="Nenhum psicólogo encontrado" description="Não há profissionais para este filtro." /> : <div className="staff-grid">{resources.map((resource) => { const isActive = resource.ativo !== false; return <article className="card staff-card" key={resource.id}><ProfileAvatar profile={resource} size="professional" /><div className="staff-card-content"><h3>{resource.nome}</h3>{resource.bio ? <p>{resource.bio}</p> : null}{resource.capacidade !== undefined ? <span>Capacidade: {resource.capacidade}</span> : null}<span className="badge">{isActive ? 'Ativo' : 'Inativo'}</span></div>{canChange ? <div className="meta-actions"><Link to={`/admin/psicologos/${resource.id}/editar`} className="button-primary small-button">Editar</Link><Link to={`/admin/psicologos/${resource.id}/horarios`} className="button-secondary small-button">Horários</Link><button className="button-ghost small-button" onClick={() => toggle(resource)}>{isActive ? 'Desativar' : 'Ativar'}</button></div> : null}</article> })}</div>}</section>
 }
 
 function AdminResourceFormPage({ permissions }) {
-  const { id } = useParams(); const navigate = useNavigate(); const editing = Boolean(id); const [form, setForm] = useState({ nome: '', bio: '', capacidade: '', ativo: true }); const [photo, setPhoto] = useState(null); const [loading, setLoading] = useState(editing); const [saving, setSaving] = useState(false); const [error, setError] = useState(''); const [fields, setFields] = useState({})
+  const { id } = useParams()
+  const navigate = useNavigate()
+  const editing = Boolean(id)
+  const [form, setForm] = useState({ nome: '', bio: '', capacidade: '', ativo: true })
+  const [photo, setPhoto] = useState(null)
+  const [loading, setLoading] = useState(editing)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [fields, setFields] = useState({})
   const canEdit = hasPermission(permissions, editing ? 'api.change_recurso' : 'api.add_recurso')
-  const load = async () => { if (!editing) return; try { const item = await apiRequest(`/recursos/${id}/`); setForm({ nome: item.nome || '', bio: item.bio || '', capacidade: item.capacidade ?? '', ativo: item.ativo !== false }) } catch (err) { setError(err.message) } finally { setLoading(false) } }; useEffect(() => { load() }, [id])
-  const submit = async (event) => { event.preventDefault(); try { setSaving(true); setError(''); setFields({}); const body = new FormData(); Object.entries(form).forEach(([key, value]) => body.append(key, value)); if (photo) body.append('foto', photo); await apiRequest(editing ? `/recursos/${id}/` : '/recursos/', { method: editing ? 'PATCH' : 'POST', body }); navigate('/admin/psicologos') } catch (err) { setError(err.message); setFields(err.fields || {}) } finally { setSaving(false) } }
-  return <section className="page-block"><PageHeader title={editing ? 'Editar psicólogo' : 'Novo psicólogo'} subtitle="Preencha os dados do profissional." backLabel="Voltar para psicólogos" backTo="/admin/psicologos" />{loading ? <LoadingState message="Carregando psicólogo" /> : null}<div className="card section-card"><form className="stack-form" onSubmit={submit}><label>Nome<input value={form.nome} onChange={(event) => setForm({ ...form, nome: event.target.value })} disabled={!canEdit} /></label><label>Bio<textarea value={form.bio} onChange={(event) => setForm({ ...form, bio: event.target.value })} disabled={!canEdit} /></label><label>Capacidade<input type="number" value={form.capacidade} onChange={(event) => setForm({ ...form, capacidade: event.target.value })} disabled={!canEdit} /></label><label>Foto<input type="file" accept="image/*" onChange={(event) => setPhoto(event.target.files?.[0] || null)} disabled={!canEdit} /></label><label><input type="checkbox" checked={form.ativo} onChange={(event) => setForm({ ...form, ativo: event.target.checked })} disabled={!canEdit} /> Ativo</label><FieldErrors errors={fields} />{error ? <Alert type="danger" message={error} /> : null}{canEdit ? <button className="button-primary" disabled={saving}>{saving ? 'Salvando...' : 'Salvar'}</button> : null}</form></div></section>
+
+  const load = async () => {
+    if (!editing) return
+    try {
+      setLoading(true)
+      setLoadFailed(false)
+      setError('')
+      const item = await apiRequest(`/recursos/${id}/`)
+      setForm({ nome: item.nome || '', bio: item.bio || '', capacidade: item.capacidade ?? '', ativo: item.ativo !== false })
+    } catch (err) {
+      setError(err.message)
+      setLoadFailed(true)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [id])
+
+  const submit = async (event) => {
+    event.preventDefault()
+    try {
+      setSaving(true)
+      setError('')
+      setFields({})
+      const body = new FormData()
+      Object.entries(form).forEach(([key, value]) => body.append(key, value))
+      if (photo) body.append('foto', photo)
+      await apiRequest(editing ? `/recursos/${id}/` : '/recursos/', { method: editing ? 'PATCH' : 'POST', body })
+      navigate('/admin/psicologos')
+    } catch (err) {
+      setError(err.message)
+      setFields(err.fields || {})
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section className="page-block">
+      <PageHeader title={editing ? 'Editar psicólogo' : 'Novo psicólogo'} subtitle="Preencha os dados do profissional." backLabel="Voltar para psicólogos" backTo="/admin/psicologos" />
+      {loading ? <LoadingState message="Carregando psicólogo" /> : null}
+      {loadFailed ? <><Alert type="danger" message={error} /><button type="button" className="button-secondary" onClick={load}>Tentar de novo</button></> : null}
+      <div className="card section-card">
+        <form className="stack-form" onSubmit={submit}>
+          <label>Nome<input value={form.nome} onChange={(event) => setForm({ ...form, nome: event.target.value })} disabled={!canEdit} />{fields.nome ? <small className="field-error">{fields.nome}</small> : null}</label>
+          <label>Bio<textarea value={form.bio} onChange={(event) => setForm({ ...form, bio: event.target.value })} disabled={!canEdit} />{fields.bio ? <small className="field-error">{fields.bio}</small> : null}</label>
+          <label>Capacidade<input type="number" value={form.capacidade} onChange={(event) => setForm({ ...form, capacidade: event.target.value })} disabled={!canEdit} />{fields.capacidade ? <small className="field-error">{fields.capacidade}</small> : null}</label>
+          <label>Foto<input type="file" accept="image/*" onChange={(event) => setPhoto(event.target.files?.[0] || null)} disabled={!canEdit} />{fields.foto ? <small className="field-error">{fields.foto}</small> : null}</label>
+          <label><input type="checkbox" checked={form.ativo} onChange={(event) => setForm({ ...form, ativo: event.target.checked })} disabled={!canEdit} /> Ativo</label>
+          {fields.general ? <Alert type="danger" message={fields.general} /> : null}
+          {error && !loadFailed ? <Alert type="danger" message={error} /> : null}
+          {canEdit ? <button className="button-primary" disabled={saving}>{saving ? 'Salvando...' : 'Salvar'}</button> : null}
+        </form>
+      </div>
+    </section>
+  )
 }
 
 function AdminAvailabilityPage({ permissions }) {
-  const { id } = useParams(); const [items, setItems] = useState([]); const [form, setForm] = useState({ dia_semana: '0', hora_inicio: '', hora_fim: '' }); const [editing, setEditing] = useState(null); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [fieldErrors, setFieldErrors] = useState({}); const canEdit = hasPermission(permissions, 'api.add_disponibilidade') || hasPermission(permissions, 'api.change_disponibilidade')
-  const load = async () => { try { setLoading(true); setError(''); setItems(await fetchAllPages(`/disponibilidades/?recurso=${id}`)) } catch (err) { setError(err.message) } finally { setLoading(false) } }; useEffect(() => { load() }, [id])
-  const submit = async (event) => { event.preventDefault(); setFieldErrors({}); if (!form.hora_inicio || !form.hora_fim || form.hora_inicio >= form.hora_fim) { setError('Informe um intervalo de horário válido.'); return } try { setError(''); await apiRequest(editing ? `/disponibilidades/${editing}/` : '/disponibilidades/', { method: editing ? 'PATCH' : 'POST', body: { ...form, recurso: id } }); setEditing(null); setForm({ dia_semana: '0', hora_inicio: '', hora_fim: '' }); await load() } catch (err) { setError(err.message); setFieldErrors(err.fields || {}) } }
-  const remove = async (item) => { if (!window.confirm('Excluir este horário?')) return; try { await apiRequest(`/disponibilidades/${item.id}/`, { method: 'DELETE' }); await load() } catch (err) { setError(err.message) } }
-  return <section className="page-block"><PageHeader title="Horários do psicólogo" subtitle="Gerencie as disponibilidades." backLabel="Voltar para psicólogos" backTo="/admin/psicologos" />{error ? <Alert type="danger" message={error} /> : null}{loading ? <LoadingState message="Carregando horários" /> : null}<div className="card section-card"><form className="date-row" onSubmit={submit}><label>Dia<select value={form.dia_semana} onChange={(event) => setForm({ ...form, dia_semana: event.target.value })}><option value="0">Domingo</option><option value="1">Segunda-feira</option><option value="2">Terça-feira</option><option value="3">Quarta-feira</option><option value="4">Quinta-feira</option><option value="5">Sexta-feira</option><option value="6">Sábado</option></select></label><label>Início<input type="time" value={form.hora_inicio} onChange={(event) => setForm({ ...form, hora_inicio: event.target.value })} /></label><label>Fim<input type="time" value={form.hora_fim} onChange={(event) => setForm({ ...form, hora_fim: event.target.value })} /></label><FieldErrors errors={fieldErrors} />{canEdit ? <button className="button-primary">{editing ? 'Atualizar' : 'Adicionar'}</button> : null}</form><div className="list-stack">{items.map((item) => <div className="list-item" key={item.id}><span>{['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'][item.dia_semana]} • {item.hora_inicio}–{item.hora_fim}</span><div className="meta-actions">{canEdit ? <button className="button-secondary small-button" onClick={() => { setEditing(item.id); setForm({ dia_semana: String(item.dia_semana), hora_inicio: item.hora_inicio, hora_fim: item.hora_fim }) }}>Editar</button> : null}{hasPermission(permissions, 'api.delete_disponibilidade') ? <button className="button-ghost small-button" onClick={() => remove(item)}>Excluir</button> : null}</div></div>)}</div></div></section>
+  const { id } = useParams()
+  const [items, setItems] = useState([])
+  const [form, setForm] = useState({ dia_semana: '0', hora_inicio: '', hora_fim: '' })
+  const [editing, setEditing] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [fieldErrors, setFieldErrors] = useState({})
+  const canAdd = hasPermission(permissions, 'api.add_disponibilidade')
+  const canChange = hasPermission(permissions, 'api.change_disponibilidade')
+  const canDelete = hasPermission(permissions, 'api.delete_disponibilidade')
+
+  const load = async () => {
+    try {
+      setLoading(true)
+      setError('')
+      setLoadFailed(false)
+      setItems(await fetchAllPages(`/disponibilidades/?recurso=${id}`))
+    } catch (err) {
+      setError(err.message)
+      setLoadFailed(true)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [id])
+
+  const submit = async (event) => {
+    event.preventDefault()
+    setFieldErrors({})
+    if (!form.hora_inicio || !form.hora_fim || form.hora_inicio >= form.hora_fim) {
+      setError('Informe um intervalo de horário válido.')
+      return
+    }
+    try {
+      setError('')
+      await apiRequest(editing ? `/disponibilidades/${editing}/` : '/disponibilidades/', {
+        method: editing ? 'PATCH' : 'POST',
+        body: { ...form, recurso: id },
+      })
+      setEditing(null)
+      setForm({ dia_semana: '0', hora_inicio: '', hora_fim: '' })
+      await load()
+    } catch (err) {
+      setError(err.message)
+      setFieldErrors(err.fields || {})
+    }
+  }
+
+  const remove = async (item) => {
+    if (!window.confirm('Excluir este horário?')) return
+    try {
+      await apiRequest(`/disponibilidades/${item.id}/`, { method: 'DELETE' })
+      await load()
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  return (
+    <section className="page-block">
+      <PageHeader title="Horários do psicólogo" subtitle="Gerencie as disponibilidades." backLabel="Voltar para psicólogos" backTo="/admin/psicologos" />
+      {error ? <Alert type="danger" message={error} /> : null}
+      {loadFailed ? <button type="button" className="button-secondary" onClick={load}>Tentar de novo</button> : null}
+      {loading ? <LoadingState message="Carregando horários" /> : null}
+      <div className="card section-card">
+        <form className="date-row" onSubmit={submit}>
+          <label>Dia<select value={form.dia_semana} onChange={(event) => setForm({ ...form, dia_semana: event.target.value })}><option value="0">Domingo</option><option value="1">Segunda-feira</option><option value="2">Terça-feira</option><option value="3">Quarta-feira</option><option value="4">Quinta-feira</option><option value="5">Sexta-feira</option><option value="6">Sábado</option></select>{fieldErrors.dia_semana ? <small className="field-error">{fieldErrors.dia_semana}</small> : null}</label>
+          <label>Início<input type="time" value={form.hora_inicio} onChange={(event) => setForm({ ...form, hora_inicio: event.target.value })} />{fieldErrors.hora_inicio ? <small className="field-error">{fieldErrors.hora_inicio}</small> : null}</label>
+          <label>Fim<input type="time" value={form.hora_fim} onChange={(event) => setForm({ ...form, hora_fim: event.target.value })} />{fieldErrors.hora_fim ? <small className="field-error">{fieldErrors.hora_fim}</small> : null}</label>
+          {fieldErrors.general ? <Alert type="danger" message={fieldErrors.general} /> : null}
+          {editing ? (canChange ? <button className="button-primary">Atualizar</button> : null) : (canAdd ? <button className="button-primary">Adicionar</button> : null)}
+        </form>
+        {!loading && !error && items.length === 0 ? <EmptyState title="Sem horários cadastrados" description="Sem horários: ninguém consegue agendar." /> : null}
+        <div className="list-stack">{items.map((item) => <div className="list-item" key={item.id}><span>{['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'][item.dia_semana]} • {item.hora_inicio}–{item.hora_fim}</span><div className="meta-actions">{canChange ? <button type="button" className="button-secondary small-button" onClick={() => { setEditing(item.id); setForm({ dia_semana: String(item.dia_semana), hora_inicio: item.hora_inicio, hora_fim: item.hora_fim }) }}>Editar</button> : null}{canDelete ? <button type="button" className="button-ghost small-button" onClick={() => remove(item)}>Excluir</button> : null}</div></div>)}</div>
+      </div>
+    </section>
+  )
 }
 
 function AdminServicesPage({ permissions }) {
   const [active, setActive] = useState('true'); const [items, setItems] = useState([]); const [loading, setLoading] = useState(true); const [error, setError] = useState('')
-  const canEdit = hasPermission(permissions, 'api.change_servico') || hasPermission(permissions, 'api.add_servico')
+  const canAdd = hasPermission(permissions, 'api.add_servico')
+  const canChange = hasPermission(permissions, 'api.change_servico')
   const load = async () => { try { setLoading(true); setError(''); setItems(await fetchAllPages(`/servicos/?ativo=${active}`)) } catch (err) { setError(err.message) } finally { setLoading(false) } }; useEffect(() => { load() }, [active])
-  return <section className="page-block"><PageHeader title="Serviços" subtitle="Gerencie os serviços oferecidos." backLabel="Voltar para administração" backTo="/admin">{canEdit ? <Link to="/admin/servicos/novo" className="button-primary">Novo serviço</Link> : null}</PageHeader><div className="meta-actions"><button className={active === 'true' ? 'button-primary' : 'button-secondary'} onClick={() => setActive('true')}>Ativos</button><button className={active === 'false' ? 'button-primary' : 'button-secondary'} onClick={() => setActive('false')}>Inativos</button></div>{loading ? <LoadingState message="Carregando serviços" /> : null}{error ? <><Alert type="danger" message={error} /><button className="button-secondary" onClick={load}>Tentar de novo</button></> : null}<div className="service-grid">{!loading && !error && !items.length ? <EmptyState title="Nenhum serviço encontrado" description="Não há serviços para este filtro." /> : items.map((item) => <article className="card service-card" key={item.id}>{item.imagem ? <img src={item.imagem} alt="" /> : null}<strong>{item.nome}</strong>{item.descricao ? <span>{item.descricao}</span> : null}{item.duracao !== undefined ? <em>{item.duracao} min</em> : null}{item.preco !== undefined ? <b>{formatCurrency(item.preco)}</b> : null}<span className="badge">{item.ativo !== false ? 'Ativo' : 'Inativo'}</span>{canEdit ? <Link className="button-primary small-button" to={`/admin/servicos/${item.id}/editar`}>Editar</Link> : null}</article>)}</div></section>
+  return <section className="page-block"><PageHeader title="Serviços" subtitle="Gerencie os serviços oferecidos." backLabel="Voltar para administração" backTo="/admin">{canAdd ? <Link to="/admin/servicos/novo" className="button-primary">Novo serviço</Link> : null}</PageHeader><div className="meta-actions"><button className={active === 'true' ? 'button-primary' : 'button-secondary'} onClick={() => setActive('true')}>Ativos</button><button className={active === 'false' ? 'button-primary' : 'button-secondary'} onClick={() => setActive('false')}>Inativos</button></div>{loading ? <LoadingState message="Carregando serviços" /> : null}{error ? <><Alert type="danger" message={error} /><button className="button-secondary" onClick={load}>Tentar de novo</button></> : null}<div className="service-grid">{!loading && !error && !items.length ? <EmptyState title="Nenhum serviço encontrado" description="Não há serviços para este filtro." /> : items.map((item) => <article className="card service-card" key={item.id}>{item.imagem ? <img src={item.imagem} alt="" /> : null}<strong>{item.nome}</strong>{item.descricao ? <span>{item.descricao}</span> : null}{item.duracao_min !== undefined ? <em>{item.duracao_min} min</em> : null}{item.preco !== undefined ? <b>{formatCurrency(item.preco)}</b> : null}<span className="badge">{item.ativo !== false ? 'Ativo' : 'Inativo'}</span>{canChange ? <Link className="button-primary small-button" to={`/admin/servicos/${item.id}/editar`}>Editar</Link> : null}</article>)}</div></section>
 }
 
 function AdminServiceFormPage({ permissions }) {
-  const { id } = useParams(); const navigate = useNavigate(); const editing = Boolean(id); const [resources, setResources] = useState([]); const [form, setForm] = useState({ nome: '', descricao: '', duracao: '', preco: '', ativo: true, recursos: [] }); const [image, setImage] = useState(null); const [loading, setLoading] = useState(editing); const [saving, setSaving] = useState(false); const [error, setError] = useState(''); const [fields, setFields] = useState({}); const canEdit = hasPermission(permissions, editing ? 'api.change_servico' : 'api.add_servico')
-  useEffect(() => { Promise.all([apiRequest('/recursos/'), editing ? apiRequest(`/servicos/${id}/`) : Promise.resolve(null)]).then(([resourceResponse, service]) => { setResources(responseList(resourceResponse)); if (service) setForm({ nome: service.nome || '', descricao: service.descricao || '', duracao: service.duracao || '', preco: service.preco || '', ativo: service.ativo !== false, recursos: (service.recursos || service.recursos_ids || []).map((resource) => resource.id || resource) }) }).catch((err) => setError(err.message)).finally(() => setLoading(false)) }, [id])
-  const submit = async (event) => { event.preventDefault(); try { setSaving(true); setError(''); setFields({}); const body = new FormData(); Object.entries(form).forEach(([key, value]) => { if (Array.isArray(value)) value.forEach((item) => body.append(key, item)); else body.append(key, value) }); if (image) body.append('imagem', image); await apiRequest(editing ? `/servicos/${id}/` : '/servicos/', { method: editing ? 'PATCH' : 'POST', body }); navigate('/admin/servicos') } catch (err) { setError(err.message); setFields(err.fields || {}) } finally { setSaving(false) } }
-  return <section className="page-block"><PageHeader title={editing ? 'Editar serviço' : 'Novo serviço'} subtitle="Configure os dados do serviço." backLabel="Voltar para serviços" backTo="/admin/servicos" />{loading ? <LoadingState message="Carregando serviço" /> : null}<div className="card section-card"><form className="stack-form" onSubmit={submit}><label>Nome<input value={form.nome} onChange={(event) => setForm({ ...form, nome: event.target.value })} disabled={!canEdit} /></label><label>Descrição<textarea value={form.descricao} onChange={(event) => setForm({ ...form, descricao: event.target.value })} disabled={!canEdit} /></label><label>Duração<input type="number" value={form.duracao} onChange={(event) => setForm({ ...form, duracao: event.target.value })} disabled={!canEdit} /></label><label>Preço<input type="number" step="0.01" value={form.preco} onChange={(event) => setForm({ ...form, preco: event.target.value })} disabled={!canEdit} /></label><label>Imagem<input type="file" accept="image/*" onChange={(event) => setImage(event.target.files?.[0] || null)} disabled={!canEdit} /></label><label><input type="checkbox" checked={form.ativo} onChange={(event) => setForm({ ...form, ativo: event.target.checked })} disabled={!canEdit} /> Ativo</label><fieldset><legend>Psicólogos</legend>{resources.map((resource) => <label key={resource.id}><input type="checkbox" checked={form.recursos.includes(resource.id)} onChange={(event) => setForm({ ...form, recursos: event.target.checked ? [...form.recursos, resource.id] : form.recursos.filter((value) => value !== resource.id) })} /> {resource.nome}</label>)}</fieldset><FieldErrors errors={fields} />{error ? <Alert type="danger" message={error} /> : null}{canEdit ? <button className="button-primary" disabled={saving}>{saving ? 'Salvando...' : 'Salvar'}</button> : null}</form></div></section>
+  const { id } = useParams()
+  const navigate = useNavigate()
+  const editing = Boolean(id)
+  const [resources, setResources] = useState([])
+  const [form, setForm] = useState({ nome: '', descricao: '', duracao_min: '', preco: '', ativo: true, recursos: [] })
+  const [image, setImage] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [fields, setFields] = useState({})
+  const canEdit = hasPermission(permissions, editing ? 'api.change_servico' : 'api.add_servico')
+
+  const load = async () => {
+    try {
+      setLoading(true)
+      setError('')
+      setLoadFailed(false)
+      const [resourceResponse, service] = await Promise.all([
+        fetchAllPages('/recursos/'),
+        editing ? apiRequest(`/servicos/${id}/`) : Promise.resolve(null),
+      ])
+      setResources(resourceResponse)
+      if (service) {
+        setForm({
+          nome: service.nome || '',
+          descricao: service.descricao || '',
+          duracao_min: service.duracao_min ?? '',
+          preco: service.preco ?? '',
+          ativo: service.ativo !== false,
+          recursos: (service.recursos || service.recursos_ids || []).map((resource) => resource.id || resource),
+        })
+      }
+    } catch (err) {
+      setError(err.message)
+      setLoadFailed(true)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [id])
+
+  const submit = async (event) => {
+    event.preventDefault()
+    try {
+      setSaving(true)
+      setError('')
+      setFields({})
+      const body = new FormData()
+      Object.entries(form).forEach(([key, value]) => {
+        if (Array.isArray(value)) value.forEach((item) => body.append(key, item))
+        else body.append(key, value)
+      })
+      if (image) body.append('imagem', image)
+      await apiRequest(editing ? `/servicos/${id}/` : '/servicos/', { method: editing ? 'PATCH' : 'POST', body })
+      navigate('/admin/servicos')
+    } catch (err) {
+      setError(err.message)
+      setFields(err.fields || {})
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section className="page-block">
+      <PageHeader title={editing ? 'Editar serviço' : 'Novo serviço'} subtitle="Configure os dados do serviço." backLabel="Voltar para serviços" backTo="/admin/servicos" />
+      {loading ? <LoadingState message="Carregando serviço" /> : null}
+      {loadFailed ? <><Alert type="danger" message={error} /><button type="button" className="button-secondary" onClick={load}>Tentar de novo</button></> : null}
+      <div className="card section-card">
+        <form className="stack-form" onSubmit={submit}>
+          <label>Nome<input value={form.nome} onChange={(event) => setForm({ ...form, nome: event.target.value })} disabled={!canEdit} />{fields.nome ? <small className="field-error">{fields.nome}</small> : null}</label>
+          <label>Descrição<textarea value={form.descricao} onChange={(event) => setForm({ ...form, descricao: event.target.value })} disabled={!canEdit} />{fields.descricao ? <small className="field-error">{fields.descricao}</small> : null}</label>
+          <label>Duração<input type="number" value={form.duracao_min} onChange={(event) => setForm({ ...form, duracao_min: event.target.value })} disabled={!canEdit} />{fields.duracao_min ? <small className="field-error">{fields.duracao_min}</small> : null}</label>
+          <label>Preço<input type="number" step="0.01" value={form.preco} onChange={(event) => setForm({ ...form, preco: event.target.value })} disabled={!canEdit} />{fields.preco ? <small className="field-error">{fields.preco}</small> : null}</label>
+          <label>Imagem<input type="file" accept="image/*" onChange={(event) => setImage(event.target.files?.[0] || null)} disabled={!canEdit} />{fields.imagem ? <small className="field-error">{fields.imagem}</small> : null}</label>
+          <label><input type="checkbox" checked={form.ativo} onChange={(event) => setForm({ ...form, ativo: event.target.checked })} disabled={!canEdit} /> Ativo</label>
+          <fieldset><legend>Psicólogos</legend>{resources.length ? resources.map((resource) => <label key={resource.id}><input type="checkbox" checked={form.recursos.includes(resource.id)} onChange={(event) => setForm({ ...form, recursos: event.target.checked ? [...form.recursos, resource.id] : form.recursos.filter((value) => value !== resource.id) })} disabled={!canEdit} /> {resource.nome}</label>) : <p className="muted">Nenhum psicólogo cadastrado.</p>}{fields.recursos ? <small className="field-error">{fields.recursos}</small> : null}</fieldset>
+          {fields.general ? <Alert type="danger" message={fields.general} /> : null}
+          {error && !loadFailed ? <Alert type="danger" message={error} /> : null}
+          {canEdit ? <button className="button-primary" disabled={saving || loading}>{saving ? 'Salvando...' : 'Salvar'}</button> : null}
+        </form>
+      </div>
+    </section>
+  )
 }
 
 function AdminReviewsPage() {
-  const [reviews, setReviews] = useState([]); const [resources, setResources] = useState([]); const [resourceId, setResourceId] = useState(''); const [rating, setRating] = useState(''); const [next, setNext] = useState(false); const [page, setPage] = useState(1); const [loading, setLoading] = useState(true); const [error, setError] = useState('')
-  const load = async (append = false) => { try { setLoading(true); setError(''); const query = `/avaliacoes/?${resourceId ? `recurso=${resourceId}&` : ''}${rating ? `nota=${rating}&` : ''}page=${append ? page + 1 : 1}`; const [response, resourceResponse] = await Promise.all([apiRequest(query), resources.length ? Promise.resolve(resources) : apiRequest('/recursos/')]); const list = responseList(response); setReviews((current) => append ? [...current, ...list] : list); setNext(Boolean(response?.next)); setPage(append ? page + 1 : 1); if (!resources.length) setResources(responseList(resourceResponse)) } catch (err) { setError(err.message) } finally { setLoading(false) } }
+  const [reviews, setReviews] = useState([]); const [resources, setResources] = useState([]); const [services, setServices] = useState([]); const [resourceId, setResourceId] = useState(''); const [rating, setRating] = useState(''); const [next, setNext] = useState(false); const [page, setPage] = useState(1); const [loading, setLoading] = useState(true); const [error, setError] = useState('')
+  const load = async (append = false) => { try { setLoading(true); setError(''); const query = `/avaliacoes/?${resourceId ? `recurso=${resourceId}&` : ''}${rating ? `nota=${rating}&` : ''}page=${append ? page + 1 : 1}`; const [response, resourceList, serviceList] = await Promise.all([apiRequest(query), resources.length ? Promise.resolve(resources) : fetchAllPages('/recursos/'), services.length ? Promise.resolve(services) : fetchAllPages('/servicos/')]); const list = responseList(response); setReviews((current) => append ? [...current, ...list] : list); setNext(Boolean(response?.next)); setPage(append ? page + 1 : 1); if (!resources.length) setResources(resourceList); if (!services.length) setServices(serviceList) } catch (err) { setError(err.message) } finally { setLoading(false) } }
   useEffect(() => { load() }, [resourceId, rating])
-  return <section className="page-block"><PageHeader title="Avaliações" subtitle="Acompanhe a satisfação dos pacientes." backLabel="Voltar para administração" backTo="/admin" /><div className="date-row"><label>Psicólogo<select value={resourceId} onChange={(event) => setResourceId(event.target.value)}><option value="">Todos</option>{resources.map((resource) => <option value={resource.id} key={resource.id}>{resource.nome}</option>)}</select></label><label>Nota<select value={rating} onChange={(event) => setRating(event.target.value)}><option value="">Todas</option>{[1, 2, 3, 4, 5].map((value) => <option value={value} key={value}>{value}</option>)}</select></label></div>{loading ? <LoadingState message="Carregando avaliações" /> : null}{error ? <><Alert type="danger" message={error} /><button className="button-secondary" onClick={() => load()}>Tentar de novo</button></> : null}<div className="card section-card">{!loading && !error && !reviews.length ? <EmptyState title="Ainda sem avaliações" description="Nenhuma avaliação corresponde aos filtros." /> : <div className="list-stack">{reviews.map((item) => <div className="list-item" key={item.id}><div><strong>{item.nota}/5 • {item.recurso?.nome || item.recurso || 'Profissional'}</strong><p>{item.comentario || 'Sem comentário.'}</p><p><strong>Paciente:</strong> {item.cliente?.nome || item.cliente || 'Não informado'}</p><p><strong>Serviço:</strong> {item.servico?.nome || item.servico || 'Não informado'}</p></div></div>)}{next ? <button className="button-secondary" onClick={() => load(true)}>Carregar mais</button> : null}</div>}</div></section>
+  return <section className="page-block"><PageHeader title="Avaliações" subtitle="Acompanhe a satisfação dos pacientes." backLabel="Voltar para administração" backTo="/admin" /><div className="date-row"><label>Psicólogo<select value={resourceId} onChange={(event) => setResourceId(event.target.value)}><option value="">Todos</option>{resources.map((resource) => <option value={resource.id} key={resource.id}>{resource.nome}</option>)}</select></label><label>Nota<select value={rating} onChange={(event) => setRating(event.target.value)}><option value="">Todas</option>{[1, 2, 3, 4, 5].map((value) => <option value={value} key={value}>{value}</option>)}</select></label></div>{loading ? <LoadingState message="Carregando avaliações" /> : null}{error ? <><Alert type="danger" message={error} /><button className="button-secondary" onClick={() => load()}>Tentar de novo</button></> : null}<div className="card section-card">{!loading && !error && !reviews.length ? <EmptyState title="Ainda sem avaliações" description="Nenhuma avaliação corresponde aos filtros." /> : <div className="list-stack">{reviews.map((item) => { const resourceName = resolveRelatedName(item.recurso, resources, item.recurso_nome || item.psicologo_nome); const serviceName = resolveRelatedName(item.servico, services, item.servico_nome || item.nome_servico); return <div className="list-item" key={item.id}><div><strong>{item.nota}/5 • {resourceName || 'Profissional'}</strong><p>{item.comentario || 'Sem comentário.'}</p><p><strong>Paciente:</strong> {item.cliente?.nome || item.cliente_nome || item.paciente?.nome || 'Não informado'}</p><p><strong>Serviço:</strong> {serviceName || 'Não informado'}</p></div></div> })}{next ? <button type="button" className="button-secondary" disabled={loading} onClick={() => load(true)}>{loading ? 'Carregando...' : 'Carregar mais'}</button> : null}</div>}</div></section>
 }
 
 export default App
