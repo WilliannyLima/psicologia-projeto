@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { useAuth } from '../../AuthContext.js'
 import { hasPermission, apiRequest } from '../../api/client.js'
 import { Erro } from '../../components/Erro.jsx'
 import { CabecalhoPagina } from '../../components/CabecalhoPagina.jsx'
 import { Carregando } from '../../components/Carregando.jsx'
 
-export function FormularioPsicologo({ permissions }) {
+export function FormularioPsicologo() {
+  const { profile } = useAuth()
+  const permissions = profile?.permissoes
   const { id } = useParams()
   const navigate = useNavigate()
   const editing = Boolean(id)

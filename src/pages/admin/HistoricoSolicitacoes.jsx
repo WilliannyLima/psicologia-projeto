@@ -76,7 +76,6 @@ export function HistoricoSolicitacoes() {
             <input type="date" value={filters.date} onChange={(event) => updateFilter('date', event.target.value)} />
           </label>
         </div>
-        <p className="muted">A API não informa quando ou por quem o pedido foi processado, nem possui uma ação ou situação de recusa. Os cancelamentos aparecem como “Cancelado”, sem identificar quem os realizou.</p>
       </div>
 
       {loading ? <Carregando message="Carregando histórico" /> : null}
