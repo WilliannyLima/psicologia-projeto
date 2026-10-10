@@ -8,6 +8,7 @@ import { Erro } from '../components/Erro.jsx'
 import { CabecalhoPagina } from '../components/CabecalhoPagina.jsx'
 import { Carregando } from '../components/Carregando.jsx'
 import { BotaoVoltar } from '../components/BotaoVoltar.jsx'
+import { ConfirmacaoCancelamento } from '../components/ConfirmacaoCancelamento.jsx'
 
 export function Sessao() {
   const { profile } = useAuth()
@@ -107,19 +108,7 @@ export function Sessao() {
         </div>
         {hasReview ? <div className="session-highlight"><strong>Avaliação: {appointment.nota ?? review?.nota}/5</strong><span>{appointment.comentario || review?.comentario || 'Sem comentário'}</span></div> : null}
       </div>
-      {showCancelModal ? (
-        <div className="confirmation-backdrop" onClick={() => setShowCancelModal(false)}>
-          <section className="confirmation-modal" role="alertdialog" aria-modal="true" aria-labelledby="cancel-session-title" aria-describedby="cancel-session-message" onClick={(event) => event.stopPropagation()}>
-            <div className="confirmation-icon" aria-hidden="true">!</div>
-            <h2 id="cancel-session-title">Cancelar sessão?</h2>
-            <p id="cancel-session-message">Tem certeza de que deseja cancelar esta sessão?</p>
-            <div className="confirmation-actions">
-              <button type="button" className="button-ghost" onClick={() => setShowCancelModal(false)}>Voltar</button>
-              <button type="button" className="button-danger" onClick={handleCancel} disabled={cancelLoading}>{cancelLoading ? 'Cancelando...' : 'Cancelar sessão'}</button>
-            </div>
-          </section>
-        </div>
-      ) : null}
+      <ConfirmacaoCancelamento open={showCancelModal} onClose={() => setShowCancelModal(false)} onConfirm={handleCancel} loading={cancelLoading} />
     </section>
   )
 }
