@@ -1,6 +1,7 @@
 import { useAuth } from '../../AuthContext.js'
 import { resolveRelatedName } from '../../utils/appointments.js'
 import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { hasPermission, fetchAllPages, apiRequest } from '../../api/client.js'
 import { formatDate } from '../../utils/formatters.js'
 import { Erro } from '../../components/Erro.jsx'
@@ -79,7 +80,9 @@ export function AConfirmar() {
 
   return (
     <section className="page-block">
-      <CabecalhoPagina title="Pedidos para confirmar" subtitle="Revise e responda às solicitações." backLabel="Voltar para administração" backTo="/admin" />
+      <CabecalhoPagina title="Pedidos para confirmar" subtitle="Revise e responda às solicitações." backLabel="Voltar para administração" backTo="/admin">
+        <Link to="/admin/historico-solicitacoes" className="button-secondary">Ver histórico</Link>
+      </CabecalhoPagina>
       {actionMessage ? <Erro type={actionMessage.includes('sucesso') ? 'success' : 'danger'} message={actionMessage} /> : null}
       {loading ? <Carregando message="Carregando solicitações" /> : null}
       {error ? <><Erro type="danger" message={error} /><button type="button" className="button-secondary" onClick={load}>Tentar de novo</button></> : null}

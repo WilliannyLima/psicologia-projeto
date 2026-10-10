@@ -24,6 +24,7 @@ export function Menu({ onNavigate = () => {}, sidebarOpen = false }) {
           </> : <>
             <NavLink to="/admin/agenda" onClick={onNavigate}><span aria-hidden="true">◷</span> Agenda</NavLink>
             <NavLink to="/admin/solicitacoes" onClick={onNavigate}><span aria-hidden="true">!</span> A confirmar</NavLink>
+            <NavLink to="/admin/historico-solicitacoes" onClick={onNavigate}><span aria-hidden="true">◷</span> Histórico de solicitações</NavLink>
             <NavLink to="/admin/organizacao" onClick={onNavigate}><span aria-hidden="true">▦</span> Negócio</NavLink>
             <NavLink to="/admin/psicologos" onClick={onNavigate}><span aria-hidden="true">♧</span> Psicólogos</NavLink>
             <NavLink to="/admin/servicos" onClick={onNavigate}><span aria-hidden="true">▤</span> Serviços</NavLink>

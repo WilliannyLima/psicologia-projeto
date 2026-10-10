@@ -20,6 +20,7 @@ import { InicioAdmin } from './pages/admin/Inicio.jsx'
 import { Agenda } from './pages/admin/Agenda.jsx'
 import { SessaoAdmin } from './pages/admin/Sessao.jsx'
 import { AConfirmar } from './pages/admin/AConfirmar.jsx'
+import { HistoricoSolicitacoes } from './pages/admin/HistoricoSolicitacoes.jsx'
 import { Negocio } from './pages/admin/Negocio.jsx'
 import { PsicologosAdmin } from './pages/admin/Psicologos.jsx'
 import { FormularioPsicologo } from './pages/admin/Psicologo.jsx'
@@ -74,6 +75,7 @@ function App() {
         <Route path="/admin/agenda" element={<Protegida permissao="admin"><Agenda /></Protegida>} />
         <Route path="/admin/sessao/:id" element={<Protegida permissao="admin"><SessaoAdmin /></Protegida>} />
         <Route path="/admin/solicitacoes" element={<Protegida permissao="admin"><AConfirmar /></Protegida>} />
+        <Route path="/admin/historico-solicitacoes" element={<Protegida permissao="admin"><HistoricoSolicitacoes /></Protegida>} />
         <Route path="/admin/organizacao" element={<Protegida permissao="admin"><Negocio /></Protegida>} />
         <Route path="/admin/avaliacoes" element={<Protegida permissao="admin"><Avaliacoes /></Protegida>} />
         <Route path="/admin/psicologos" element={<Protegida permissao="admin"><PsicologosAdmin /></Protegida>} />
