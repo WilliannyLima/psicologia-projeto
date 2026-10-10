@@ -1,5 +1,6 @@
 import { formatLocalDate, resolveRelatedName } from '../../utils/appointments.js'
 import { useEffect, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { fetchAllPages } from '../../api/client.js'
 import { formatDate } from '../../utils/formatters.js'
 import { Erro } from '../../components/Erro.jsx'
@@ -10,6 +11,7 @@ import { ListaSessoes } from '../../components/ListaSessoes.jsx'
 import { SessaoItem } from '../../components/SessaoItem.jsx'
 
 export function Agenda() {
+  const location = useLocation()
   const [date, setDate] = useState(() => formatLocalDate(new Date()))
   const [resourceId, setResourceId] = useState('')
   const [resources, setResources] = useState([])
@@ -28,6 +30,7 @@ export function Agenda() {
   useEffect(() => { load() }, [date, resourceId])
   return (
     <section className="page-block"><CabecalhoPagina title="Agenda do dia" subtitle="Acompanhe os atendimentos do consultório." backLabel="Voltar para administração" backTo="/admin" />
+      {location.state?.errorMessage ? <Erro type="danger" message={location.state.errorMessage} /> : null}
       <div className="date-row"><label>Dia<input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label><label>Psicólogo<select value={resourceId} onChange={(event) => setResourceId(event.target.value)}><option value="">Todos</option>{resources.map((resource) => <option key={resource.id} value={resource.id}>{resource.nome}</option>)}</select></label></div>
       {loading ? <Carregando message="Consultando agenda" /> : null}{error ? <><Erro type="danger" message={error} /><button type="button" className="button-secondary" onClick={load}>Tentar de novo</button></> : null}
       {!loading && !error ? <div className="card section-card">

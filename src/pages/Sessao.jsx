@@ -1,7 +1,7 @@
 import { useAuth } from '../AuthContext.js'
 import { resolveRelatedName } from '../utils/appointments.js'
 import { useEffect, useRef, useState } from 'react'
-import { Link, useLocation, useParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { hasPermission, fetchAllPages, apiRequest } from '../api/client.js'
 import { formatDate, formatCurrency, formatStatus } from '../utils/formatters.js'
 import { Erro } from '../components/Erro.jsx'
@@ -14,6 +14,7 @@ export function Sessao() {
   const { profile } = useAuth()
   const { id } = useParams()
   const location = useLocation()
+  const navigate = useNavigate()
   const [appointment, setAppointment] = useState(null)
   const [serviceOptions, setServiceOptions] = useState([])
   const [resourceOptions, setResourceOptions] = useState([])
@@ -50,7 +51,10 @@ export function Sessao() {
         setLookupError('')
       }
     } catch (err) {
-      if (requestId === appointmentRequestId.current) setError(err.message)
+      if (requestId === appointmentRequestId.current) {
+        if (err.status === 404) navigate('/minhas-sessoes', { replace: true, state: { errorMessage: 'Não encontrado.' } })
+        else setError(err.message)
+      }
     } finally {
       if (requestId === appointmentRequestId.current) setLoading(false)
     }

@@ -144,7 +144,7 @@ export function Inicio() {
                 </div>
                 <div className="meta-actions">
                   <span className="badge">{formatStatus(nextSession.status)}</span>
-                  <Link to="/minhas-sessoes" className="button-secondary small-button">Ver agendamento</Link>
+                  <Link to={`/sessao/${nextSession.id}`} className="button-secondary small-button">Ver agendamento</Link>
                 </div>
               </div>
             ) : (

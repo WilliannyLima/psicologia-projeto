@@ -1,7 +1,7 @@
 import { useAuth } from '../AuthContext.js'
 import { formatLocalDate, resolveRelatedName } from '../utils/appointments.js'
 import { useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { hasPermission, fetchAllPages, apiRequest } from '../api/client.js'
 import { formatDate } from '../utils/formatters.js'
 import { Erro } from '../components/Erro.jsx'
@@ -13,6 +13,7 @@ import { SessaoItem } from '../components/SessaoItem.jsx'
 
 export function MinhasSessoes() {
   const { profile } = useAuth()
+  const location = useLocation()
   const [appointments, setAppointments] = useState([])
   const [serviceOptions, setServiceOptions] = useState([])
   const [resourceOptions, setResourceOptions] = useState([])
@@ -90,6 +91,7 @@ export function MinhasSessoes() {
         backLabel="Voltar para o painel"
         backTo="/dashboard"
       />
+      {location.state?.errorMessage ? <Erro type="danger" message={location.state.errorMessage} /> : null}
 
       <div className="meta-actions">
         <button type="button" className={tab === 'upcoming' ? 'button-primary' : 'button-secondary'} onClick={() => setTab('upcoming')}>Próximos</button>

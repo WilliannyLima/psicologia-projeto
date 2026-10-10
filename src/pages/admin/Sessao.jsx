@@ -1,7 +1,7 @@
 import { useAuth } from '../../AuthContext.js'
 import { resolveRelatedName } from '../../utils/appointments.js'
 import { useEffect, useRef, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { hasPermission, fetchAllPages, apiRequest } from '../../api/client.js'
 import { formatDate, formatCurrency, formatStatus } from '../../utils/formatters.js'
 import { Erro } from '../../components/Erro.jsx'
@@ -14,6 +14,7 @@ export function SessaoAdmin() {
   const { profile } = useAuth()
   const permissions = profile?.permissoes
   const { id } = useParams()
+  const navigate = useNavigate()
   const [item, setItem] = useState(null)
   const [services, setServices] = useState([])
   const [resources, setResources] = useState([])
@@ -28,8 +29,8 @@ export function SessaoAdmin() {
     try {
       setLoading(true)
       setError('')
-      const [appointment, serviceList, resourceList] = await Promise.all([
-        apiRequest(`/agendamentos/${id}/`),
+      const appointment = await apiRequest(`/agendamentos/${id}/`)
+      const [serviceList, resourceList] = await Promise.all([
         fetchAllPages('/servicos/'),
         fetchAllPages('/recursos/'),
       ])
@@ -37,7 +38,8 @@ export function SessaoAdmin() {
       setServices(serviceList)
       setResources(resourceList)
     } catch (err) {
-      setError(err.message)
+      if (err.status === 404) navigate('/admin/agenda', { replace: true, state: { errorMessage: 'Não encontrado.' } })
+      else setError(err.message)
     } finally {
       setLoading(false)
     }
