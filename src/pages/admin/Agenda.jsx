@@ -1,4 +1,5 @@
 import { formatLocalDate, resolveRelatedName } from '../../utils/appointments.js'
+import { getAppointmentPatientName } from '../../utils/requestHistory.js'
 import { useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { fetchAllPages } from '../../api/client.js'
@@ -37,7 +38,7 @@ export function Agenda() {
         {agenda.length ? <ListaSessoes>{agenda.map((item) => {
           const serviceName = resolveRelatedName(item.servico, services, item.servico_nome || item.nome_servico)
           const resourceName = resolveRelatedName(item.recurso, resources, item.recurso_nome || item.psicologo_nome)
-          return <SessaoItem to={`/admin/sessao/${item.id}`} key={item.id} title={serviceName || resourceName || 'Sessão'} subtitle={`${resourceName || 'Psicólogo'} • ${item.cliente?.nome || item.cliente_nome || item.paciente?.nome || 'Paciente'} • ${formatDate(item.inicio)}`} status={item.status}><p>{item.observacoes || 'Sem observações.'}</p></SessaoItem>
+          return <SessaoItem to={`/admin/sessao/${item.id}`} key={item.id} title={serviceName || resourceName || 'Sessão'} subtitle={`${resourceName || 'Psicólogo'} • ${getAppointmentPatientName(item, 'Paciente')} • ${formatDate(item.inicio)}`} status={item.status}><p>{item.observacoes || 'Sem observações.'}</p></SessaoItem>
         })}</ListaSessoes> : <EstadoVazio title="Nenhum atendimento neste dia" description="A agenda não possui atendimentos para o filtro selecionado." />}
       </div> : null}
     </section>

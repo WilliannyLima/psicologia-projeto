@@ -2,8 +2,8 @@ import { formatLocalDate } from './appointments.js'
 
 export const PROCESSED_APPOINTMENT_STATUSES = ['confirmado', 'cancelado', 'concluido']
 
-export function getAppointmentPatientName(appointment) {
-  return appointment?.cliente?.nome || appointment?.cliente_nome || appointment?.paciente?.nome || 'Paciente não informado'
+export function getAppointmentPatientName(appointment, fallback = 'Paciente não informado') {
+  return appointment?.cliente?.nome || appointment?.cliente_nome || appointment?.paciente?.nome || fallback
 }
 
 export function deduplicateAppointments(appointments) {

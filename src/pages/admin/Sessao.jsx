@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { hasPermission, fetchAllPages, apiRequest } from '../../api/client.js'
 import { formatDate, formatCurrency, formatStatus } from '../../utils/formatters.js'
+import { getAppointmentPatientName } from '../../utils/requestHistory.js'
 import { Erro } from '../../components/Erro.jsx'
 import { CabecalhoPagina } from '../../components/CabecalhoPagina.jsx'
 import { Carregando } from '../../components/Carregando.jsx'
@@ -89,7 +90,7 @@ export function SessaoAdmin() {
       <CabecalhoPagina title={serviceName || resourceName || 'Detalhe da sessão'} subtitle="Gerencie o agendamento conforme suas permissões." backLabel="Voltar para agenda" backTo="/admin/agenda" />
       {actionMessage ? <Erro type={actionMessage.includes('sucesso') ? 'success' : 'danger'} message={actionMessage} /> : null}
       <div className="card section-card">
-        <p><strong>Paciente:</strong> {item.cliente?.nome || item.cliente_nome || item.paciente?.nome || 'Não informado'}</p>
+        <p><strong>Paciente:</strong> {getAppointmentPatientName(item, 'Não informado')}</p>
         <p><strong>Serviço:</strong> {serviceName || 'Não informado'}</p>
         <p><strong>Psicólogo:</strong> {resourceName || 'Não informado'}</p>
         <p><strong>Data:</strong> {formatDate(item.inicio)}</p>

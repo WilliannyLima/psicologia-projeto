@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { hasPermission, fetchAllPages, apiRequest } from '../../api/client.js'
 import { formatDate } from '../../utils/formatters.js'
+import { getAppointmentPatientName } from '../../utils/requestHistory.js'
 import { Erro } from '../../components/Erro.jsx'
 import { CabecalhoPagina } from '../../components/CabecalhoPagina.jsx'
 import { Carregando } from '../../components/Carregando.jsx'
@@ -95,7 +96,7 @@ export function AConfirmar() {
               return (
                 <div className="list-item" key={item.id}>
                   <div>
-                    <strong>{item.cliente?.nome || item.cliente_nome || item.paciente?.nome || 'Paciente'}</strong>
+                    <strong>{getAppointmentPatientName(item, 'Paciente')}</strong>
                     <p>{serviceName || 'Sessão'} • {resourceName || 'Psicólogo'} • {formatDate(item.inicio)}</p>
                     <p>{item.observacoes || 'Sem observações.'}</p>
                   </div>

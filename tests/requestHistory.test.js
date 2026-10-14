@@ -25,5 +25,6 @@ test('deduplica resultados por ID e não inclui solicitações pendentes como hi
 test('usa os formatos conhecidos para o nome do paciente', () => {
   assert.equal(getAppointmentPatientName({ cliente: { nome: 'Ana' } }), 'Ana')
   assert.equal(getAppointmentPatientName({ cliente_nome: 'Bruno' }), 'Bruno')
+  assert.equal(getAppointmentPatientName({}, 'Paciente'), 'Paciente')
   assert.equal(getAppointmentPatientName({}), 'Paciente não informado')
 })
