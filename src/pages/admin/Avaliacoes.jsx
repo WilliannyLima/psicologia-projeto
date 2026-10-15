@@ -4,8 +4,7 @@ import { Erro } from '../../components/Erro.jsx'
 import { CabecalhoPagina } from '../../components/CabecalhoPagina.jsx'
 import { Carregando } from '../../components/Carregando.jsx'
 import { EstadoVazio } from '../../components/EstadoVazio.jsx'
-import { resolveRelatedName } from '../../utils/appointments.js'
-import { getAppointmentPatientName } from '../../utils/requestHistory.js'
+
 
 export function Avaliacoes() {
   const [reviews, setReviews] = useState([]); const [resources, setResources] = useState([]); const [services, setServices] = useState([]); const [resourceId, setResourceId] = useState(''); const [rating, setRating] = useState(''); const [next, setNext] = useState(false); const [page, setPage] = useState(1); const [loading, setLoading] = useState(true); const [error, setError] = useState('')

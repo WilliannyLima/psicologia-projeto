@@ -1,5 +1,3 @@
-import { getProfilePhoto } from '../utils/formatters.js'
-
 export function Foto({ profile, size = 'default', className = '' }) {
   const photo = getProfilePhoto(profile)
   const initial = (profile?.nome || 'P').charAt(0).toUpperCase()

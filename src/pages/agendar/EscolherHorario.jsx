@@ -1,6 +1,5 @@
 import { useAgendamento } from './AgendamentoContext.js'
 import { useNavigate } from 'react-router-dom'
-import { formatLocalDate } from '../../utils/appointments.js'
 import { Carregando } from '../../components/Carregando.jsx'
 
 export function EscolherHorario() {

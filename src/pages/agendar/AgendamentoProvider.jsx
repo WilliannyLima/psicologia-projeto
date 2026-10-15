@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { apiRequest, fetchAllPages } from '../../api/client.js'
-import { buildAppointmentPayload, formatLocalDate, isSelectableDate, groupSlotsByResource } from '../../utils/appointments.js'
 import { AgendamentoContext } from './AgendamentoContext.js'
 
 const DRAFT_KEY = 'psicologia_agendamento_rascunho'

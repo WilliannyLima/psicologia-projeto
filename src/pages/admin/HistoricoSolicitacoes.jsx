@@ -1,8 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { fetchAllPages } from '../../api/client.js'
-import { filterProcessedAppointments, getAppointmentPatientName, deduplicateAppointments, PROCESSED_APPOINTMENT_STATUSES } from '../../utils/requestHistory.js'
-import { resolveRelatedName } from '../../utils/appointments.js'
-import { formatDate, formatStatus } from '../../utils/formatters.js'
 import { Erro } from '../../components/Erro.jsx'
 import { CabecalhoPagina } from '../../components/CabecalhoPagina.jsx'
 import { Carregando } from '../../components/Carregando.jsx'

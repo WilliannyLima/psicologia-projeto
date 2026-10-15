@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { fetchAllPages } from '../api/client.js'
-import { getProfessionalPhoto } from '../utils/formatters.js'
 import { useApi } from '../hooks/useApi.js'
 import { Erro } from '../components/Erro.jsx'
 import { CabecalhoPagina } from '../components/CabecalhoPagina.jsx'

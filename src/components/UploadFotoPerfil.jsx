@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiRequest, requireProfileResponse } from '../api/client.js'
-import { getProfilePhoto } from '../utils/formatters.js'
 import { Erro } from './Erro.jsx'
 import { Foto } from './Foto.jsx'
 

@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { Link, Outlet } from 'react-router-dom'
-import { formatDisplayName } from '../utils/formatters.js'
 import { useAuth } from '../AuthContext.js'
 import { Erro } from './Erro.jsx'
 import { Foto } from './Foto.jsx'

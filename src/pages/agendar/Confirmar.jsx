@@ -1,6 +1,5 @@
 import { useAgendamento } from './AgendamentoContext.js'
 import { useNavigate } from 'react-router-dom'
-import { formatCurrency, formatDate } from '../../utils/formatters.js'
 import { ErrosCampos } from '../../components/ErrosCampos.jsx'
 
 export function Confirmar() {

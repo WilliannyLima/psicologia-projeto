@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import { useAgendamento } from './AgendamentoContext.js'
-import { formatCurrency, formatDate, formatStatus } from '../../utils/formatters.js'
+
 
 export function Enviado() {
   const { selectedService, selectedResource, selectedSlot, submittedAppointment } = useAgendamento()

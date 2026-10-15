@@ -1,5 +1,4 @@
 import { useAuth } from '../AuthContext.js'
-import { resolveRelatedName } from '../utils/appointments.js'
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { hasPermission, fetchAllPages, apiRequest } from '../api/client.js'

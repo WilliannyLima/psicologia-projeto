@@ -1,6 +1,6 @@
 import { useAgendamento } from './AgendamentoContext.js'
 import { EstadoVazio } from '../../components/EstadoVazio.jsx'
-import { formatCurrency } from '../../utils/formatters.js'
+
 
 export function EscolherServico() {
   const { availableServices, selectService } = useAgendamento()
