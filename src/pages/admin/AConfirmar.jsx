@@ -8,6 +8,20 @@ import { Carregando } from '../../components/Carregando.jsx'
 import { EstadoVazio } from '../../components/EstadoVazio.jsx'
 import { ConfirmacaoCancelamento } from '../../components/ConfirmacaoCancelamento.jsx'
 
+function formatDate(value) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? 'Data não informada' : new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(date)
+}
+function resolveRelatedName(related, options = [], fallback) {
+  if (related && typeof related === 'object') return related.nome || related.name || fallback || ''
+  const match = options.find((item) => String(item.id) === String(related))
+  return match?.nome || match?.name || fallback || ''
+}
+function getAppointmentPatientName(item, fallback = 'Não informado') {
+  const name = item?.paciente?.nome || item?.paciente_nome || item?.nome_paciente || item?.usuario?.nome || item?.usuario_nome || item?.cliente?.nome || item?.cliente_nome
+  return typeof name === 'string' && name.trim() ? name.trim() : fallback
+}
+
 export function AConfirmar() {
   const { profile } = useAuth()
   const permissions = profile?.permissoes

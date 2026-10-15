@@ -5,6 +5,11 @@ import { AgendamentoContext } from './AgendamentoContext.js'
 
 const DRAFT_KEY = 'psicologia_agendamento_rascunho'
 
+function formatLocalDate(value) {
+  const date = value instanceof Date ? value : new Date(value)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
 function readDraft() {
   try { return JSON.parse(sessionStorage.getItem(DRAFT_KEY) || 'null') || {} } catch { return {} }
 }
@@ -14,6 +19,40 @@ function normalizeAvailableSlots(response) {
   return groups.flatMap((group) => Array.isArray(group?.horarios)
     ? group.horarios.filter((inicio) => typeof inicio === 'string' && !Number.isNaN(Date.parse(inicio))).map((inicio) => ({ inicio, ...(group.recurso ? { recurso: group.recurso } : {}) }))
     : [])
+}
+
+function isSelectableDate(value, minimumDate) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) && value >= minimumDate
+}
+
+function buildAppointmentPayload({ selectedService, selectedResource, selectedSlot, observacoes }) {
+  const recursoId = selectedResource?.id ?? selectedSlot?.recurso?.id ?? selectedSlot?.recurso
+  return {
+    servico: selectedService.id,
+    recurso: recursoId,
+    inicio: selectedSlot.inicio,
+    observacoes,
+  }
+}
+
+function groupSlotsByResource(availableSlots, selectedResource) {
+  const groups = new Map()
+
+  availableSlots.forEach((slot) => {
+    const resource = slot.recurso || selectedResource
+    const id = resource?.id ?? resource ?? 'disponivel'
+    const key = String(id)
+    if (!groups.has(key)) {
+      groups.set(key, {
+        id: key,
+        nome: resource?.nome || selectedResource?.nome || 'Profissional disponível',
+        horarios: [],
+      })
+    }
+    groups.get(key).horarios.push(slot)
+  })
+
+  return Array.from(groups.values())
 }
 
 export function AgendamentoProvider({ children }) {

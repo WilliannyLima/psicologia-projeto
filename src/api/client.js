@@ -89,11 +89,11 @@ export async function api(caminho, opcoes = {}) {
         resposta = await enviar(caminho, opcoes)
       } else {
         clearStoredAuth()
-        window.location.href = '/login'
+        if (window.location.pathname !== '/login') window.location.href = '/login'
       }
     } else {
       clearStoredAuth()
-      window.location.href = '/login'
+      if (window.location.pathname !== '/login') window.location.href = '/login'
     }
   }
 
@@ -115,16 +115,14 @@ export async function api(caminho, opcoes = {}) {
 }
 
 export async function buscarTodas(caminho) {
-  let itens = []
-  let proxima = caminho
+  return fetchAllPages(caminho)
+}
 
-  while (proxima) {
-    const dados = await api(proxima)
-    itens = [...itens, ...(Array.isArray(dados) ? dados : dados?.results || [])]
-    proxima = dados?.next || null
-  }
-
-  return itens
+export function responseList(resposta, { strict = false } = {}) {
+  if (Array.isArray(resposta)) return resposta
+  if (resposta && typeof resposta === 'object' && Array.isArray(resposta.results)) return resposta.results
+  if (strict) throw new TypeError('A API retornou uma resposta sem uma lista válida.')
+  return []
 }
 
 export function mensagemDeErro(erro) {
@@ -176,20 +174,41 @@ export function requireProfileResponse(resposta) {
 export function login(email, senha) {
   return api('/auth/login/', {
     method: 'POST',
-    body: { email, senha },
+    body: { organizacao: 'psicologia', email, senha },
   })
 }
 
 export function cadastrar(nome, email, senha) {
   return api('/auth/cadastro/', {
     method: 'POST',
-    body: { nome, email, senha },
+    body: { organizacao: 'psicologia', nome, email, senha },
   })
 }
 
 export function redefinirSenha(email) {
   return api('/auth/redefinir-senha/', {
     method: 'POST',
-    body: { email },
+    body: { organizacao: 'psicologia', email },
   })
+}
+
+export const apiRequest = api
+
+export async function fetchAllPages(caminho, opcoes = {}) {
+  const itens = []
+  let proxima = caminho
+  const { strict = false, ...requestOptions } = opcoes
+
+  while (proxima) {
+    const dados = await api(proxima, requestOptions)
+    itens.push(...responseList(dados, { strict }))
+    proxima = dados && !Array.isArray(dados) ? dados.next || null : null
+  }
+
+  return itens
+}
+
+export function authenticationErrorMessage(erro, fallback) {
+  const message = mensagemDeErro(erro)
+  return message === 'Verifique os campos destacados.' && fallback ? fallback : message
 }

@@ -22,26 +22,32 @@ export function AuthProvider({ children }) {
       .finally(() => setCarregando(false))
   }, [])
 
-  async function entrar(email, senha) {
-    setCarregando(true)
+  async function entrar(emailOuDados, senhaInformada) {
+    const { email, senha } = typeof emailOuDados === 'object'
+      ? emailOuDados
+      : { email: emailOuDados, senha: senhaInformada }
+    const tokens = await apiRequest('/auth/login/', {
+      method: 'POST',
+      body: { organizacao: 'psicologia', email, senha },
+    })
+
+    writeStoredJSON(STORAGE_KEYS.tokens, tokens)
 
     try {
-      const tokens = await apiRequest('/auth/login/', {
-        method: 'POST',
-        body: { organizacao: 'psicologia', email, senha },
-      })
-
-      writeStoredJSON(STORAGE_KEYS.tokens, tokens)
-
       const perfil = await apiRequest('/auth/eu/')
       writeStoredJSON(STORAGE_KEYS.profile, perfil)
       setUsuario(perfil)
-    } finally {
-      setCarregando(false)
+      return { profile: perfil }
+    } catch (erro) {
+      clearStoredAuth()
+      throw erro
     }
   }
 
-  async function cadastrar(nome, email, senha) {
+  async function cadastrar(dadosOuNome, emailInformado, senhaInformada) {
+    const { nome, email, senha } = typeof dadosOuNome === 'object'
+      ? dadosOuNome
+      : { nome: dadosOuNome, email: emailInformado, senha: senhaInformada }
     await apiRequest('/auth/cadastro/', {
       method: 'POST',
       body: { organizacao: 'psicologia', nome, email, senha },
@@ -61,20 +67,27 @@ export function AuthProvider({ children }) {
   }
 
   const inicio = pode('api.change_organizacao') ? '/admin/agenda' : '/dashboard'
+  const isAuthenticated = Boolean(readStoredJSON(STORAGE_KEYS.tokens)?.access)
 
   return (
     <AuthContext.Provider value={{
       usuario,
+      profile: usuario,
       setUsuario,
+      setProfile: setUsuario,
       carregando,
+      loading: carregando,
       entrar,
+      login: entrar,
       cadastrar,
+      register: cadastrar,
       sair,
+      logout: sair,
       pode,
       inicio,
       flash,
       setFlash,
-      isAuthenticated: Boolean(readStoredJSON(STORAGE_KEYS.tokens)?.access),
+      isAuthenticated,
       isAdmin: pode('api.change_organizacao'),
     }}>
       {children}

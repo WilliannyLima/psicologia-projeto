@@ -1,3 +1,9 @@
+function getProfilePhoto(profile) {
+  return typeof profile?.foto === 'string' && profile.foto.trim()
+    ? profile.foto.trim()
+    : ''
+}
+
 export function Foto({ profile, size = 'default', className = '' }) {
   const photo = getProfilePhoto(profile)
   const initial = (profile?.nome || 'P').charAt(0).toUpperCase()

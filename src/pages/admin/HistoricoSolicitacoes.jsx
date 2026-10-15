@@ -5,6 +5,49 @@ import { CabecalhoPagina } from '../../components/CabecalhoPagina.jsx'
 import { Carregando } from '../../components/Carregando.jsx'
 import { EstadoVazio } from '../../components/EstadoVazio.jsx'
 
+const PROCESSED_APPOINTMENT_STATUSES = ['confirmado', 'concluido', 'concluído', 'realizado', 'cancelado']
+
+function deduplicateAppointments(items) {
+  const seen = new Set()
+  return items.filter((item) => {
+    if (item?.id === undefined || item?.id === null) return true
+    const id = String(item.id)
+    if (seen.has(id)) return false
+    seen.add(id)
+    return true
+  })
+}
+
+function filterProcessedAppointments(items, filters) {
+  const patientQuery = filters.patient.trim().toLocaleLowerCase('pt-BR')
+  const selectedStatus = filters.status.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  return items.filter((item) => {
+    const appointmentStatus = String(item.status || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    const matchesStatus = filters.status === 'todos' || appointmentStatus === selectedStatus
+    const matchesPatient = !patientQuery || getAppointmentPatientName(item, '').toLocaleLowerCase('pt-BR').includes(patientQuery)
+    const matchesDate = !filters.date || String(item.inicio || '').startsWith(filters.date)
+    return matchesStatus && matchesPatient && matchesDate
+  })
+}
+
+function formatDate(value) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? 'Data não informada' : new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(date)
+}
+function formatStatus(status) {
+  const labels = { solicitado: 'Solicitada', confirmado: 'Confirmada', realizado: 'Realizada', cancelado: 'Cancelada' }
+  return labels[String(status || '').toLowerCase()] || String(status || 'Não informado')
+}
+function resolveRelatedName(related, options = [], fallback) {
+  if (related && typeof related === 'object') return related.nome || related.name || fallback || ''
+  const match = options.find((item) => String(item.id) === String(related))
+  return match?.nome || match?.name || fallback || ''
+}
+function getAppointmentPatientName(item, fallback = 'Não informado') {
+  const name = item?.paciente?.nome || item?.paciente_nome || item?.nome_paciente || item?.usuario?.nome || item?.usuario_nome || item?.cliente?.nome || item?.cliente_nome
+  return typeof name === 'string' && name.trim() ? name.trim() : fallback
+}
+
 export function HistoricoSolicitacoes() {
   const [appointments, setAppointments] = useState([])
   const [services, setServices] = useState([])

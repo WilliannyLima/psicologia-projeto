@@ -1,6 +1,11 @@
 import { useAgendamento } from './AgendamentoContext.js'
 import { EstadoVazio } from '../../components/EstadoVazio.jsx'
 
+function formatCurrency(value) {
+  const amount = Number(value)
+  return Number.isFinite(amount) ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(amount) : ''
+}
+
 
 export function EscolherServico() {
   const { availableServices, selectService } = useAgendamento()

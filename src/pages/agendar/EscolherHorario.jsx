@@ -2,6 +2,11 @@ import { useAgendamento } from './AgendamentoContext.js'
 import { useNavigate } from 'react-router-dom'
 import { Carregando } from '../../components/Carregando.jsx'
 
+function formatLocalDate(value) {
+  const date = value instanceof Date ? value : new Date(value)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
 export function EscolherHorario() {
   const { date, min, dateError, slots, slotGroups, slotsLoading, selectDate, selectSlot, selectedResource, selectedService } = useAgendamento()
   const navigate = useNavigate()

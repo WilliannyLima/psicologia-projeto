@@ -8,6 +8,24 @@ import { EstadoVazio } from '../../components/EstadoVazio.jsx'
 import { ListaSessoes } from '../../components/ListaSessoes.jsx'
 import { SessaoItem } from '../../components/SessaoItem.jsx'
 
+function formatLocalDate(value) {
+  const date = value instanceof Date ? value : new Date(value)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+function formatDate(value) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? 'Data não informada' : new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(date)
+}
+function resolveRelatedName(related, options = [], fallback) {
+  if (related && typeof related === 'object') return related.nome || related.name || fallback || ''
+  const match = options.find((item) => String(item.id) === String(related))
+  return match?.nome || match?.name || fallback || ''
+}
+function getAppointmentPatientName(item, fallback = 'Não informado') {
+  const name = item?.paciente?.nome || item?.paciente_nome || item?.nome_paciente || item?.usuario?.nome || item?.usuario_nome || item?.cliente?.nome || item?.cliente_nome
+  return typeof name === 'string' && name.trim() ? name.trim() : fallback
+}
+
 export function Agenda() {
   const location = useLocation()
   const [date, setDate] = useState(() => formatLocalDate(new Date()))

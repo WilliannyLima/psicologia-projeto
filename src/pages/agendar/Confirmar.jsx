@@ -2,6 +2,15 @@ import { useAgendamento } from './AgendamentoContext.js'
 import { useNavigate } from 'react-router-dom'
 import { ErrosCampos } from '../../components/ErrosCampos.jsx'
 
+function formatDate(value) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? 'Data não informada' : new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short' }).format(date)
+}
+function formatCurrency(value) {
+  const amount = Number(value)
+  return Number.isFinite(amount) ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(amount) : ''
+}
+
 export function Confirmar() {
   const { selectedService, selectedResource, selectedSlot, date, observacoes, setObservacoes, fieldErrors, loading, confirmAppointment } = useAgendamento()
   const navigate = useNavigate()

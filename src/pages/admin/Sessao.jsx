@@ -8,6 +8,28 @@ import { Carregando } from '../../components/Carregando.jsx'
 import { BotaoVoltar } from '../../components/BotaoVoltar.jsx'
 import { ConfirmacaoCancelamento } from '../../components/ConfirmacaoCancelamento.jsx'
 
+function formatDate(value) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? 'Data não informada' : new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(date)
+}
+function formatCurrency(value) {
+  const amount = Number(value)
+  return Number.isFinite(amount) ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(amount) : ''
+}
+function formatStatus(status) {
+  const labels = { solicitado: 'Solicitada', confirmado: 'Confirmada', realizado: 'Realizada', cancelado: 'Cancelada' }
+  return labels[String(status || '').toLowerCase()] || String(status || 'Não informado')
+}
+function resolveRelatedName(related, options = [], fallback) {
+  if (related && typeof related === 'object') return related.nome || related.name || fallback || ''
+  const match = options.find((option) => String(option.id) === String(related))
+  return match?.nome || match?.name || fallback || ''
+}
+function getAppointmentPatientName(item, fallback = 'Não informado') {
+  const name = item?.paciente?.nome || item?.paciente_nome || item?.nome_paciente || item?.usuario?.nome || item?.usuario_nome || item?.cliente?.nome || item?.cliente_nome
+  return typeof name === 'string' && name.trim() ? name.trim() : fallback
+}
+
 export function SessaoAdmin() {
   const { profile } = useAuth()
   const permissions = profile?.permissoes

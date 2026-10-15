@@ -8,6 +8,11 @@ import { Carregando } from '../../components/Carregando.jsx'
 import { EstadoVazio } from '../../components/EstadoVazio.jsx'
 import { FiltroAtivo } from '../../components/FiltroAtivo.jsx'
 
+function formatCurrency(value) {
+  const amount = Number(value)
+  return Number.isFinite(amount) ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(amount) : ''
+}
+
 export function Servicos() {
   const { profile } = useAuth()
   const permissions = profile?.permissoes

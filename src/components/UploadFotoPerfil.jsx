@@ -8,6 +8,7 @@ export function UploadFotoPerfil({ profile, onProfileChange, onLoadingChange, di
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [loading, setLoading] = useState(false)
+  const hasProfilePhoto = typeof profile?.foto === 'string' && profile.foto.trim() !== ''
   const requestInProgressRef = useRef(false)
   const preview = useMemo(
     () => (selectedFile ? URL.createObjectURL(selectedFile) : ''),
@@ -117,9 +118,9 @@ export function UploadFotoPerfil({ profile, onProfileChange, onLoadingChange, di
         <p>Escolha uma foto para personalizar seu perfil. JPG, PNG ou WEBP, até 5 MB.</p>
         <div className="profile-photo-actions">
           <label className="button-secondary" htmlFor="profile-photo-input" aria-disabled={disabled || loading}>
-            {getProfilePhoto(profile) ? 'Alterar foto' : 'Adicionar foto'}
+            {hasProfilePhoto ? 'Alterar foto' : 'Adicionar foto'}
           </label>
-          {getProfilePhoto(profile) ? (
+          {hasProfilePhoto ? (
             <button type="button" className="button-ghost" onClick={handleRemove} disabled={disabled || loading}>
               Remover foto
             </button>

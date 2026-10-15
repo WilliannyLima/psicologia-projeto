@@ -8,6 +8,24 @@ import { Carregando } from '../components/Carregando.jsx'
 import { Indicador } from '../components/Indicador.jsx'
 import { EstadoVazio } from '../components/EstadoVazio.jsx'
 
+function formatLocalDate(value) {
+  const date = value instanceof Date ? value : new Date(value)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+function formatDate(value) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? 'Data não informada' : new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(date)
+}
+function formatStatus(status) {
+  const labels = { solicitado: 'Solicitada', confirmado: 'Confirmada', realizado: 'Realizada', cancelado: 'Cancelada' }
+  return labels[String(status || '').toLowerCase()] || String(status || 'Não informado')
+}
+function resolveRelatedName(related, options = [], fallback) {
+  if (related && typeof related === 'object') return related.nome || related.name || fallback || ''
+  const match = options.find((item) => String(item.id) === String(related))
+  return match?.nome || match?.name || fallback || ''
+}
+
 export function Inicio() {
   const { profile } = useAuth()
   const [organization, setOrganization] = useState(null)

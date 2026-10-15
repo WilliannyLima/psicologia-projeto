@@ -26,11 +26,7 @@ export function Login() {
       const { profile } = await login(form)
       navigate(profile.permissoes?.includes('api.change_organizacao') ? '/admin' : '/dashboard')
     } catch (err) {
-      if (err.status === 400) {
-        setError('Organização, e-mail ou senha inválidos')
-      } else {
-        setError(authenticationErrorMessage(err, 'Não foi possível entrar. Verifique seu e-mail e senha.'))
-      }
+      setError(authenticationErrorMessage(err, 'Não foi possível entrar. Verifique seu e-mail e senha.'))
     } finally {
       setLoading(false)
     }

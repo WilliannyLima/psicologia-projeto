@@ -1,6 +1,19 @@
 import { Link } from 'react-router-dom'
 import { useAgendamento } from './AgendamentoContext.js'
 
+function formatDate(value) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? 'Data não informada' : new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(date)
+}
+function formatCurrency(value) {
+  const amount = Number(value)
+  return Number.isFinite(amount) ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(amount) : ''
+}
+function formatStatus(status) {
+  const labels = { solicitado: 'Solicitada', confirmado: 'Confirmada', realizado: 'Realizada', cancelado: 'Cancelada' }
+  return labels[String(status || '').toLowerCase()] || String(status || 'Não informado')
+}
+
 
 export function Enviado() {
   const { selectedService, selectedResource, selectedSlot, submittedAppointment } = useAgendamento()

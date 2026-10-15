@@ -8,6 +8,24 @@ import { Carregando } from '../components/Carregando.jsx'
 import { BotaoVoltar } from '../components/BotaoVoltar.jsx'
 import { ConfirmacaoCancelamento } from '../components/ConfirmacaoCancelamento.jsx'
 
+function formatDate(value) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? 'Data não informada' : new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(date)
+}
+function formatCurrency(value) {
+  const amount = Number(value)
+  return Number.isFinite(amount) ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(amount) : ''
+}
+function formatStatus(status) {
+  const labels = { solicitado: 'Solicitada', confirmado: 'Confirmada', realizado: 'Realizada', cancelado: 'Cancelada' }
+  return labels[String(status || '').toLowerCase()] || String(status || 'Não informado')
+}
+function resolveRelatedName(related, options = [], fallback) {
+  if (related && typeof related === 'object') return related.nome || related.name || fallback || ''
+  const match = options.find((item) => String(item.id) === String(related))
+  return match?.nome || match?.name || fallback || ''
+}
+
 export function Sessao() {
   const { profile } = useAuth()
   const { id } = useParams()

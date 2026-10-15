@@ -69,7 +69,7 @@ export function Psicologos() {
           {psychologists.map((professional) => {
             const professionalProfile = {
               nome: professional.nome,
-              foto: getProfessionalPhoto(professional),
+              foto: professional.foto,
             }
             const profession = professional.profissao || professional.cargo
             const specialty = professional.especialidade || professional.especialidades

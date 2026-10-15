@@ -7,6 +7,12 @@ import { Carregando } from '../components/Carregando.jsx'
 import { Foto } from '../components/Foto.jsx'
 import { BotaoVoltar } from '../components/BotaoVoltar.jsx'
 
+function resolveRelatedName(related, options = [], fallback) {
+  if (related && typeof related === 'object') return related.nome || related.name || fallback || ''
+  const match = options.find((item) => String(item.id) === String(related))
+  return match?.nome || match?.name || fallback || ''
+}
+
 export function Psicologo() {
   const { profile } = useAuth()
   const { id } = useParams()

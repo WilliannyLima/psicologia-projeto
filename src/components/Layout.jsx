@@ -5,6 +5,10 @@ import { Erro } from './Erro.jsx'
 import { Foto } from './Foto.jsx'
 import { Menu } from './Menu.jsx'
 
+function formatDisplayName(name) {
+  return typeof name === 'string' && name.trim() ? name.trim().split(/\s+/)[0] : 'bem-vindo(a)'
+}
+
 export function Layout() {
   const { profile, isAuthenticated, isAdmin, flash } = useAuth()
   const [sidebarOpen, setSidebarOpen] = useState(false)
