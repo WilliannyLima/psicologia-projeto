@@ -1,26 +1,30 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://agendamentos.spaincentral.cloudapp.azure.com/api'
-export const STORAGE_KEYS = { tokens: 'psicologia_tokens', profile: 'psicologia_profile' }
-let tokenRefreshPromise = null
+const API = import.meta.env.VITE_API_BASE_URL || 'https://agendamentos.spaincentral.cloudapp.azure.com/api'
 
-export function hasPermission(permissions, permission) { return Array.isArray(permissions) && permissions.includes(permission) }
+export const STORAGE_KEYS = {
+  tokens: 'psicologia_tokens',
+  profile: 'psicologia_profile',
+}
 
-export function authenticationErrorMessage(error, fallback) { if (error?.status === 400) return fallback; if (error?.status === 429) return 'Muitas tentativas, aguarde um minuto.'; if (error?.status === 403) return 'Você não tem permissão para esta ação.'; return error?.message || fallback }
+let renovandoToken = null
 
-export function readStoredJSON(key) {
+export function hasPermission(permissoes, permissao) {
+  return Array.isArray(permissoes) && permissoes.includes(permissao)
+}
+
+export function readStoredJSON(chave) {
   try {
-    const value = localStorage.getItem(key)
-    return value ? JSON.parse(value) : null
+    return JSON.parse(localStorage.getItem(chave))
   } catch {
     return null
   }
 }
 
-export function writeStoredJSON(key, value) {
-  if (!value) {
-    localStorage.removeItem(key)
-    return
+export function writeStoredJSON(chave, valor) {
+  if (valor) {
+    localStorage.setItem(chave, JSON.stringify(valor))
+  } else {
+    localStorage.removeItem(chave)
   }
-  localStorage.setItem(key, JSON.stringify(value))
 }
 
 export function clearStoredAuth() {
@@ -28,189 +32,164 @@ export function clearStoredAuth() {
   localStorage.removeItem(STORAGE_KEYS.profile)
 }
 
-export function normalizeErrorMessage(payload) {
-  if (!payload) return 'Não foi possível concluir a operação.'
+async function enviar(caminho, { method = 'GET', body, headers = {}, ignorarAuth = false } = {}) {
+  const url = caminho.startsWith('http') ? caminho : API + caminho
+  const tokens = readStoredJSON(STORAGE_KEYS.tokens)
+  const cabecalhos = { ...headers }
 
-  if (typeof payload === 'string') return payload
-
-  if (payload.detail) return payload.detail
-
-  if (payload.non_field_errors) {
-    const value = payload.non_field_errors
-    return Array.isArray(value) ? value.join(', ') : String(value)
+  if (tokens?.access && !ignorarAuth) {
+    cabecalhos.Authorization = `Bearer ${tokens.access}`
   }
 
-  if (Array.isArray(payload)) {
-    return payload.join(', ')
+  if (body && !(body instanceof FormData)) {
+    cabecalhos['Content-Type'] = 'application/json'
+    body = JSON.stringify(body)
   }
 
-  if (typeof payload === 'object') {
-    const flatEntries = Object.entries(payload)
-      .map(([, value]) => {
-        if (Array.isArray(value)) return value.join(', ')
-        if (typeof value === 'object' && value !== null) return Object.values(value).join(', ')
-        return String(value)
-      })
-      .filter(Boolean)
-
-    if (flatEntries.length > 0) return flatEntries.join(' • ')
-  }
-
-  return 'Erro inesperado. Tente novamente.'
+  return fetch(url, { method, headers: cabecalhos, body })
 }
 
-export function responseList(response) {
-  return Array.isArray(response?.results) ? response.results : Array.isArray(response) ? response : []
-}
+async function renovarToken() {
+  const refresh = readStoredJSON(STORAGE_KEYS.tokens)?.refresh
+  if (!refresh) return false
 
-export async function fetchAllPages(path, { strict = false } = {}) {
-  const items = []
-  let nextPath = path
-  const apiBase = new URL(`${API_BASE_URL.replace(/\/+$/, '')}/`)
-  const apiPrefix = apiBase.pathname.replace(/\/+$/, '')
-
-  while (nextPath) {
-    const response = await apiRequest(nextPath)
-    if (strict && !Array.isArray(response) && !Array.isArray(response?.results)) {
-      throw new Error('A API retornou uma resposta de lista inválida.')
-    }
-    items.push(...responseList(response))
-    if (!response?.next) break
-    const nextUrl = new URL(response.next, apiBase)
-    if (nextUrl.origin !== apiBase.origin || !nextUrl.pathname.startsWith(`${apiPrefix}/`)) {
-      throw new Error('A paginação da API apontou para um endereço inesperado.')
-    }
-    nextPath = `${nextUrl.pathname.slice(apiPrefix.length)}${nextUrl.search}`
-  }
-
-  return items
-}
-
-export function extractFieldErrors(payload) {
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-    return {}
-  }
-
-  const fieldErrors = {}
-
-  Object.entries(payload).forEach(([key, value]) => {
-    if (key === 'detail' || key === 'non_field_errors') return
-
-    const formatted = Array.isArray(value)
-      ? value.join(' ')
-      : typeof value === 'object' && value !== null
-        ? Object.values(value).flat().join(' ')
-        : String(value)
-
-    if (formatted) fieldErrors[key] = formatted
-  })
-
-  if (payload.non_field_errors) {
-    const value = payload.non_field_errors
-    fieldErrors.general = Array.isArray(value) ? value.join(' ') : String(value)
-  }
-
-  return fieldErrors
-}
-
-export async function apiRequest(path, options = {}) {
-  const { _retried = false, _skipAuth = false, _retryCount = 0, ...fetchOptions } = options
-  const method = (fetchOptions.method || 'GET').toUpperCase()
-  const canRetry = method === 'GET' || method === 'HEAD'
-  const storedTokens = readStoredJSON(STORAGE_KEYS.tokens)
-  const token = storedTokens?.access
-  const headers = { ...(fetchOptions.headers || {}) }
-
-  if (!(fetchOptions.body instanceof FormData)) {
-    headers['Content-Type'] = headers['Content-Type'] || 'application/json'
-  }
-
-  if (token && !_skipAuth && !headers.Authorization) {
-    headers.Authorization = `Bearer ${token}`
-  }
-
-  const requestInit = {
-    ...fetchOptions,
-    headers,
-  }
-
-  if (fetchOptions.body !== undefined) {
-    requestInit.body =
-      fetchOptions.body instanceof FormData ? fetchOptions.body : JSON.stringify(fetchOptions.body)
-  }
-
-  let response
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, requestInit)
+    const resposta = await enviar('/auth/renovar/', {
+      method: 'POST',
+      body: { refresh },
+      ignorarAuth: true,
+    })
+
+    if (!resposta.ok) return false
+
+    const tokens = readStoredJSON(STORAGE_KEYS.tokens)
+    writeStoredJSON(STORAGE_KEYS.tokens, { ...tokens, ...await resposta.json() })
+    return true
   } catch {
-    if (canRetry && _retryCount < 2) {
-      return apiRequest(path, { ...fetchOptions, _retried, _skipAuth, _retryCount: _retryCount + 1 })
-    }
-    throw new Error('Não foi possível conectar ao serviço. Verifique sua conexão e tente novamente.')
+    return false
+  }
+}
+
+export async function api(caminho, opcoes = {}) {
+  let resposta = await enviar(caminho, opcoes).catch(() => null)
+
+  if (!resposta) {
+    throw { status: 0, message: 'Não foi possível falar com o servidor.' }
   }
 
-  if (canRetry && response.status >= 500 && _retryCount < 2) {
-    return apiRequest(path, { ...fetchOptions, _retried, _skipAuth, _retryCount: _retryCount + 1 })
-  }
+  const publicas = ['/auth/login/', '/auth/cadastro/', '/auth/redefinir-senha/']
 
-  const contentType = response.headers.get('content-type') || ''
-  const payload = contentType.includes('application/json')
-    ? await response.json().catch(() => null)
-    : await response.text().catch(() => null)
+  if (resposta.status === 401 && !publicas.includes(caminho) && !caminho.includes('/auth/renovar/')) {
+    if (readStoredJSON(STORAGE_KEYS.tokens)?.refresh) {
+      if (!renovandoToken) {
+        renovandoToken = renovarToken().finally(() => renovandoToken = null)
+      }
 
-  const isPublicAuthRequest = ['/auth/login/', '/auth/cadastro/', '/auth/redefinir-senha/'].includes(path)
-  if (response.status === 401 && token && !_retried && path !== '/auth/renovar/' && !isPublicAuthRequest) {
-    const refresh = storedTokens?.refresh
-
-    if (refresh) {
-      try {
-        if (!tokenRefreshPromise) {
-          tokenRefreshPromise = apiRequest('/auth/renovar/', {
-            method: 'POST',
-            body: { refresh },
-            _retried: true,
-            _skipAuth: true,
-          }).then((renewal) => {
-            const nextTokens = { ...storedTokens, ...renewal }
-            writeStoredJSON(STORAGE_KEYS.tokens, nextTokens)
-            return nextTokens
-          }).finally(() => {
-            tokenRefreshPromise = null
-          })
-        }
-        await tokenRefreshPromise
-        return apiRequest(path, { ...fetchOptions, _retried: true })
-      } catch (refreshError) {
+      if (await renovandoToken) {
+        resposta = await enviar(caminho, opcoes)
+      } else {
         clearStoredAuth()
-        tokenRefreshPromise = null
-        window.location.assign('/login')
-        throw new Error('Sua sessão expirou. Entre novamente.', { cause: refreshError })
+        window.location.href = '/login'
       }
     } else {
       clearStoredAuth()
-      window.location.assign('/login')
-      throw new Error('Sua sessão expirou. Entre novamente.')
+      window.location.href = '/login'
     }
   }
 
-  if (!response.ok) {
-    const error = new Error(normalizeErrorMessage(payload))
-    error.status = response.status
-    error.fields = extractFieldErrors(payload)
-    if (response.status === 404) error.message = 'Não encontrado.'
-    if (response.status === 403) error.message = 'Você não tem permissão para esta ação.'
-    if (response.status === 429) error.message = 'Muitas tentativas, aguarde um minuto.'
-    if (response.status >= 500) error.message = 'O serviço está temporariamente indisponível. Tente novamente.'
-    throw error
+  const tipo = resposta.headers.get('content-type') || ''
+  const dados = resposta.status === 204 ? null : tipo.includes('application/json')
+    ? await resposta.json().catch(() => null)
+    : await resposta.text().catch(() => null)
+
+  if (!resposta.ok) {
+    throw {
+      status: resposta.status,
+      dados,
+      message: mensagemDeErro({ status: resposta.status, dados }),
+      fields: extrairErrosCampos(dados),
+    }
   }
 
-  return payload
+  return dados
 }
 
-export function requireProfileResponse(response) {
-  if (!response || typeof response !== 'object' || Array.isArray(response) || typeof response.nome !== 'string' || !response.nome.trim()) {
+export async function buscarTodas(caminho) {
+  let itens = []
+  let proxima = caminho
+
+  while (proxima) {
+    const dados = await api(proxima)
+    itens = [...itens, ...(Array.isArray(dados) ? dados : dados?.results || [])]
+    proxima = dados?.next || null
+  }
+
+  return itens
+}
+
+export function mensagemDeErro(erro) {
+  const dados = erro?.dados
+
+  if (!erro?.status) return erro?.message || 'Não foi possível falar com o servidor.'
+  if (erro.status === 403) return 'Você não tem permissão para esta ação.'
+  if (erro.status === 404) return 'Não encontrado.'
+  if (erro.status === 429) return 'Muitas tentativas, aguarde um minuto.'
+  if (erro.status >= 500) return 'O serviço está temporariamente indisponível.'
+  if (typeof dados === 'string') return dados
+  if (Array.isArray(dados)) return dados.join(' ')
+  if (dados?.detail) return dados.detail
+  if (dados?.non_field_errors) return [].concat(dados.non_field_errors).join(' ')
+
+  return Object.values(dados || {}).flatMap(valor =>
+    valor && typeof valor === 'object' ? Object.values(valor).flat() : valor
+  ).filter(Boolean).join(' • ') || 'Verifique os campos destacados.'
+}
+
+function extrairErrosCampos(dados) {
+  if (!dados || typeof dados !== 'object' || Array.isArray(dados)) return {}
+
+  const erros = {}
+
+  Object.entries(dados).forEach(([campo, valor]) => {
+    if (campo !== 'detail' && campo !== 'non_field_errors') {
+      erros[campo] = [].concat(
+        valor && typeof valor === 'object' ? Object.values(valor).flat() : valor
+      ).join(' ')
+    }
+  })
+
+  if (dados.non_field_errors) {
+    erros.general = [].concat(dados.non_field_errors).join(' ')
+  }
+
+  return erros
+}
+
+export function requireProfileResponse(resposta) {
+  if (!resposta || typeof resposta.nome !== 'string' || !resposta.nome.trim()) {
     throw new Error('A API retornou dados de perfil inválidos.')
   }
 
-  return response
+  return resposta
+}
+
+export function login(email, senha) {
+  return api('/auth/login/', {
+    method: 'POST',
+    body: { email, senha },
+  })
+}
+
+export function cadastrar(nome, email, senha) {
+  return api('/auth/cadastro/', {
+    method: 'POST',
+    body: { nome, email, senha },
+  })
+}
+
+export function redefinirSenha(email) {
+  return api('/auth/redefinir-senha/', {
+    method: 'POST',
+    body: { email },
+  })
 }
